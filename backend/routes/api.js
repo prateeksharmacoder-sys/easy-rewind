@@ -21,6 +21,15 @@
  *   POST   /api/push-subscribe     — Register push subscription
  *   DELETE /api/push-subscribe/:id — Unsubscribe
  *   POST   /api/check-reminders    — Internal: check & send due reminders
+ *   POST   /api/summarize          — AI text summarization
+ *   POST   /api/items              — Save item with summary + embedding + tags
+ *   GET    /api/items              — List items (optional ?since= for sync)
+ *   DELETE /api/items/:id          — Delete an item
+ *   GET    /api/items/search       — Vector search over items
+ *   GET    /api/ask                — RAG question answering
+ *   POST   /api/tag                — Auto-tagging
+ *   POST   /api/log                — Client error logging
+ *   GET    /api/logs               — View error logs
  */
 
 const express = require('express');
@@ -146,6 +155,69 @@ function getDb() {
     );
   `);
 
+  // ─── New: items + embeddings + tags tables ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS items (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id       TEXT    NOT NULL DEFAULT 'anonymous',
+      url           TEXT,
+      title         TEXT,
+      content       TEXT,
+      summary       TEXT,
+      tags          TEXT    DEFAULT '',
+      created_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
+      updated_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
+    );
+
+    CREATE TABLE IF NOT EXISTS item_embeddings (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id       INTEGER NOT NULL UNIQUE,
+      embedding     TEXT    NOT NULL,
+      model         TEXT    NOT NULL DEFAULT 'gemini',
+      created_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS item_tags (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id       INTEGER NOT NULL,
+      tag           TEXT    NOT NULL COLLATE NOCASE,
+      created_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
+      UNIQUE(item_id, tag)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_items_user_id     ON items (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_items_updated_at  ON items (user_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_item_tags_tag     ON item_tags (tag);
+
+  CREATE TABLE IF NOT EXISTS error_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       TEXT    NOT NULL DEFAULT 'anonymous',
+    level         TEXT    NOT NULL DEFAULT 'ERROR',
+    component     TEXT,
+    message       TEXT,
+    stack         TEXT,
+    metadata      TEXT,
+    created_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log (created_at DESC);
+  `);
+
+  // ─── Backward-compatible schema migrations ───
+  const reminderColumns = db.prepare("PRAGMA table_info(reminders)").all().map(row => row.name);
+  if (!reminderColumns.includes('repeat_interval_days')) db.exec("ALTER TABLE reminders ADD COLUMN repeat_interval_days INTEGER DEFAULT NULL");
+  if (!reminderColumns.includes('repeat_count')) db.exec("ALTER TABLE reminders ADD COLUMN repeat_count INTEGER DEFAULT 0");
+  if (!reminderColumns.includes('max_repeats')) db.exec("ALTER TABLE reminders ADD COLUMN max_repeats INTEGER DEFAULT NULL");
+  if (!reminderColumns.includes('next_review_at')) db.exec("ALTER TABLE reminders ADD COLUMN next_review_at TEXT");
+
+  // ─── Memory Score migration (Phase 1 — Smart Memory) ───
+  const itemColumns = db.prepare("PRAGMA table_info(items)").all().map(row => row.name);
+  if (!itemColumns.includes('memory_score')) db.exec("ALTER TABLE items ADD COLUMN memory_score REAL DEFAULT 0.0");
+  if (!itemColumns.includes('last_interacted_at')) db.exec("ALTER TABLE items ADD COLUMN last_interacted_at TEXT");
+  if (!itemColumns.includes('interaction_count')) db.exec("ALTER TABLE items ADD COLUMN interaction_count INTEGER DEFAULT 0");
+
   // ─── Create Indexes ──────────────────────────
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id    ON bookmarks (user_id, created_at DESC);
@@ -170,6 +242,12 @@ function getDb() {
 let genAI = null;
 let runtimeApiKey = null;  // Override from settings (persisted)
 let runtimeModel = 'gemini-2.5-flash';
+let runtimeApiBaseUrl = 'http://localhost:5000';
+let runtimeSummarizationBackend = 'auto';
+let runtimeSpacedReviewEnabled = false;
+let runtimeReviewIntervalDays = 3;
+let runtimeProfileUserId = null;
+let runtimeEmbedProvider = 'auto';
 
 const SETTINGS_PATH = path.join(__dirname, '..', 'data', 'settings.json');
 
@@ -179,12 +257,32 @@ function loadSettings() {
     if (fs.existsSync(SETTINGS_PATH)) {
       const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
       const saved = JSON.parse(raw);
-      if (saved.apiKey) runtimeApiKey = saved.apiKey;
-      if (saved.model) runtimeModel = saved.model;
-      console.log(`[Settings] Loaded: model=${runtimeModel}, has_key=!!${!!runtimeApiKey}`);
+      if (saved.apiKey || saved.gemini_api_key) runtimeApiKey = saved.apiKey || saved.gemini_api_key;
+      if (saved.model || saved.ai_model) runtimeModel = saved.model || saved.ai_model || 'gemini-2.5-flash';
+      if (saved.apiBaseUrl || saved.api_base_url) runtimeApiBaseUrl = saved.apiBaseUrl || saved.api_base_url || 'http://localhost:5000';
+      if (saved.summarizationBackend || saved.summarization_backend) runtimeSummarizationBackend = saved.summarizationBackend || saved.summarization_backend || 'auto';
+      if (saved.spacedReviewEnabled !== undefined) runtimeSpacedReviewEnabled = !!saved.spacedReviewEnabled;
+      if (saved.reviewIntervalDays) runtimeReviewIntervalDays = parseInt(saved.reviewIntervalDays) || 3;
+      if (saved.embedProvider) runtimeEmbedProvider = saved.embedProvider || 'auto';
+      if (saved.model || saved.ai_model) {
+        const model = saved.model || saved.ai_model;
+        // Reject deprecated/invalid models, default to current
+        const deprecatedModels = ['gemini-1.5-pro', 'gemini-1.0-pro'];
+        runtimeModel = deprecatedModels.includes(model) ? 'gemini-2.5-flash' : (model || 'gemini-2.5-flash');
+      }
+      if (saved.profileUserId) runtimeProfileUserId = saved.profileUserId;
+      if (!runtimeProfileUserId) {
+        runtimeProfileUserId = 'shared_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+        saveSettings();
+      }
+      console.log(`[Settings] Loaded: model=${runtimeModel}, summarization=${runtimeSummarizationBackend}, has_key=!!${!!runtimeApiKey}`);
+    } else {
+      runtimeProfileUserId = 'shared_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      saveSettings();
     }
   } catch (err) {
     console.warn('[Settings] Could not load settings file:', err.message);
+    runtimeProfileUserId = runtimeProfileUserId || 'shared_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   }
 }
 
@@ -196,6 +294,12 @@ function saveSettings() {
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify({
       apiKey: runtimeApiKey || '',
       model: runtimeModel,
+      apiBaseUrl: runtimeApiBaseUrl,
+      summarizationBackend: runtimeSummarizationBackend,
+      spacedReviewEnabled: !!runtimeSpacedReviewEnabled,
+      reviewIntervalDays: runtimeReviewIntervalDays,
+      profileUserId: runtimeProfileUserId,
+      embedProvider: runtimeEmbedProvider,
       updatedAt: new Date().toISOString(),
     }, null, 2));
   } catch (err) {
@@ -234,6 +338,68 @@ function getUserId(req) {
   return req.headers['x-user-id'] || req.body?.user_id || req.query?.user_id || 'anonymous';
 }
 
+function normalizeDate(dateValue) {
+  if (!dateValue) return null;
+  if (dateValue instanceof Date && !isNaN(dateValue.getTime())) return dateValue.toISOString();
+  if (typeof dateValue !== 'string') return null;
+  const normalized = dateValue.trim().replace(' ', 'T');
+  const withZone = normalized.endsWith('Z') ? normalized : normalized + 'Z';
+  const date = new Date(withZone);
+  return isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function sanitizeUserId(value) {
+  const cleaned = sanitize(value || '', 120);
+  return cleaned || runtimeProfileUserId || 'anonymous';
+}
+
+function createReminder(database, userId, reminder) {
+  const remindAt = normalizeDate(reminder.remind_at) || new Date().toISOString();
+  const repeatIntervalDays = Math.max(0, parseInt(reminder.repeat_interval_days) || 0);
+  const maxRepeats = reminder.max_repeats === undefined || reminder.max_repeats === null ? null : Math.max(0, parseInt(reminder.max_repeats));
+  const repeatCount = Math.max(0, parseInt(reminder.repeat_count) || 0);
+
+  return database.prepare(`
+    INSERT INTO reminders (
+      user_id, reminder_type, reference_type, reference_id, title, message,
+      remind_at, repeat_interval_days, repeat_count, max_repeats, next_review_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    userId,
+    reminder.reminder_type || 'custom',
+    reminder.reference_type || null,
+    reminder.reference_id || null,
+    sanitize(reminder.title || 'Reminder', 200),
+    sanitize(reminder.message || '', 1000),
+    remindAt,
+    repeatIntervalDays || null,
+    repeatCount,
+    maxRepeats,
+    reminder.next_review_at || null
+  );
+}
+
+function scheduleNextReview(database, reminder) {
+  if (!runtimeSpacedReviewEnabled) return null;
+  const intervalDays = parseInt(reminder.repeat_interval_days) || runtimeReviewIntervalDays || 3;
+  const maxRepeats = reminder.max_repeats === null || reminder.max_repeats === undefined ? null : parseInt(reminder.max_repeats);
+  const repeatCount = parseInt(reminder.repeat_count) || 0;
+  if (!intervalDays || (maxRepeats !== null && repeatCount >= maxRepeats)) return null;
+
+  const nextAt = new Date(Date.now() + intervalDays * 24 * 60 * 60 * 1000).toISOString();
+  return createReminder(database, reminder.user_id, {
+    reminder_type: reminder.reminder_type,
+    reference_type: reminder.reference_type,
+    reference_id: reminder.reference_id,
+    title: `Review again: ${sanitize(reminder.title || 'Saved item', 160)}`,
+    message: reminder.message || 'Time for your next spaced review.',
+    remind_at: nextAt,
+    repeat_interval_days: intervalDays,
+    repeat_count: repeatCount + 1,
+    max_repeats,
+  });
+}
+
 function sanitize(str, maxLength = 500) {
   if (typeof str !== 'string') return '';
   return str.trim().slice(0, maxLength);
@@ -246,6 +412,232 @@ async function sendPushNotification(userId, title, body, data = {}) {
 }
 
 // ─────────────────────────────────────────────
+// EMBEDDING HELPERS
+// ─────────────────────────────────────────────
+
+/**
+ * Generate an embedding vector for a given text using the configured provider.
+ * Returns an array of numbers.
+ */
+async function generateEmbedding(text) {
+  const trimmed = text.trim().slice(0, 8000);
+
+  const provider = runtimeEmbedProvider || 'auto';
+
+  // When 'openai' is explicitly selected, try OpenAI first
+  if (provider === 'openai' || (provider === 'auto' && runtimeApiKey && runtimeApiKey.startsWith('sk-'))) {
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/embeddings',
+        { input: trimmed, model: 'text-embedding-ada-002' },
+        { headers: { 'Authorization': `Bearer ${runtimeApiKey}`, 'Content-Type': 'application/json' } }
+      );
+      if (response.data?.data?.[0]?.embedding) {
+        return response.data.data[0].embedding;
+      }
+    } catch (err) {
+      console.warn('[Embedding] OpenAI embedding failed:', err.message);
+    }
+    if (provider === 'openai') {
+      // Don't fall through to Gemini if OpenAI was explicitly chosen
+      console.warn('[Embedding] OpenAI explicitly selected but failed, using hash fallback');
+      return generateHashEmbedding(trimmed, 128);
+    }
+  }
+
+  // Try Gemini embedding model
+  const ai = getGenAI();
+  if (ai && provider !== 'openai') {
+    try {
+      const embedModel = ai.getGenerativeModel({ model: 'text-embedding-004' });
+      const result = await embedModel.embedContent(trimmed);
+      const vector = result?.embedding?.values;
+      if (vector && Array.isArray(vector) && vector.length > 0) {
+        return vector;
+      }
+    } catch (err) {
+      console.warn('[Embedding] Gemini embedding failed, trying fallback:', err.message);
+    }
+  }
+
+  // Fallback: simple deterministic embedding based on word hash (non-semantic, but functional)
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[Embedding] Using hash fallback (no AI embedding provider configured)');
+  }
+  return generateHashEmbedding(trimmed, 128);
+}
+
+/**
+ * Generate a deterministic hash-based embedding vector.
+ * Not semantically meaningful — a fallback when no AI embedding is available.
+ */
+function generateHashEmbedding(text, dimensions = 128) {
+  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const vector = new Array(dimensions).fill(0);
+
+  for (const word of words) {
+    let hash = 0;
+    for (let i = 0; i < word.length; i++) {
+      hash = ((hash << 5) - hash) + word.charCodeAt(i);
+      hash |= 0;
+    }
+    const idx = Math.abs(hash) % dimensions;
+    vector[idx] += 1;
+  }
+
+  // Normalize
+  const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
+  if (magnitude > 0) {
+    for (let i = 0; i < dimensions; i++) {
+      vector[i] /= magnitude;
+    }
+  }
+  return vector;
+}
+
+/**
+ * Compute cosine similarity between two vectors.
+ */
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/**
+ * Parse a stored embedding JSON string back into an array.
+ */
+function parseEmbedding(embeddingStr) {
+  try {
+    if (typeof embeddingStr === 'string') return JSON.parse(embeddingStr);
+    if (Array.isArray(embeddingStr)) return embeddingStr;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
+// LLM SUMMARIZATION HELPER
+// ─────────────────────────────────────────────
+
+/**
+ * Call the configured LLM to generate a summary of text.
+ * Returns { success: true, summary } or { success: false, error }.
+ */
+async function summarizeText(text, options = {}) {
+  const { maxSentences = 3, style = 'concise' } = options;
+  const trimmed = text.trim().slice(0, 12000);
+  if (!trimmed) return { success: false, error: 'No text to summarize' };
+
+  const ai = getGenAI();
+  if (!ai) {
+    return { success: false, error: 'AI not configured — set GEMINI_API_KEY in .env or runtime settings' };
+  }
+
+  const styleGuide = style === 'concise'
+    ? `Summarize the following content in ${maxSentences} clear, concise sentences. Focus on the core message. Use plain language.`
+    : style === 'bullet'
+    ? `Summarize the following content as ${maxSentences} bullet points. Each point should be one line.`
+    : `Summarize the following content in ${maxSentences} sentences. Be thorough but concise.`;
+
+  const prompt = `${styleGuide}
+
+Content:
+${trimmed}
+
+Summary:`;
+
+  try {
+    const summary = await callGemini(prompt);
+    if (!summary) return { success: false, error: 'AI returned empty response' };
+    return { success: true, summary: summary.trim() };
+  } catch (err) {
+    console.error('[Summarize Error]', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// ─────────────────────────────────────────────
+// AUTO-TAGGING HELPER
+// ─────────────────────────────────────────────
+
+/**
+ * Call the configured LLM to extract tags from text.
+ * Returns { success: true, tags: [...] } or { success: false, error }.
+ */
+async function generateTags(text, options = {}) {
+  const { maxTags = 5 } = options;
+  const trimmed = text.trim().slice(0, 3000);
+  if (!trimmed) return { success: false, error: 'No text to tag', tags: [] };
+
+  const ai = getGenAI();
+  if (!ai) {
+    // Fallback: extract simple keywords
+    const words = trimmed.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+    const freq = {};
+    for (const w of words) freq[w] = (freq[w] || 0) + 1;
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, maxTags);
+    return { success: true, tags: sorted.map(([tag]) => tag) };
+  }
+
+  const prompt = `Extract up to ${maxTags} key tags or topics from the following text.
+Return ONLY a JSON array of strings, like: ["tag1", "tag2", "tag3"]
+No explanation, no formatting, just the array.
+
+Text:
+${trimmed}
+
+Tags:`;
+
+  try {
+    const result = await callGemini(prompt);
+    if (!result) return { success: true, tags: [] };
+
+    // Try to parse JSON from the response
+    const jsonMatch = result.match(/\[[\s\S]*?\]/);
+    const jsonStr = jsonMatch ? jsonMatch[0] : result;
+    const parsed = JSON.parse(jsonStr);
+    if (Array.isArray(parsed)) {
+      return { success: true, tags: parsed.slice(0, maxTags).map(t => String(t).trim()).filter(Boolean) };
+    }
+    return { success: true, tags: [] };
+  } catch (err) {
+    console.warn('[Tag Generation Error]', err.message);
+    return { success: true, tags: [] }; // Non-fatal
+  }
+}
+
+/**
+ * Store tags for an item in the item_tags table and the items.tags field.
+ */
+function storeItemTags(database, itemId, tags, userId) {
+  if (!tags || tags.length === 0) return;
+
+  // Delete existing tags for this item
+  database.prepare('DELETE FROM item_tags WHERE item_id = ?').run(itemId);
+
+  // Insert new tags
+  const insert = database.prepare('INSERT OR IGNORE INTO item_tags (item_id, tag) VALUES (?, ?)');
+  const tx = database.transaction((tags) => {
+    for (const tag of tags) {
+      insert.run(itemId, tag.trim().toLowerCase());
+    }
+  });
+  tx(tags);
+
+  // Update the tags field on the items table
+  const tagString = tags.map(t => t.trim().toLowerCase()).filter(Boolean).join(',');
+  database.prepare('UPDATE items SET tags = ? WHERE id = ?').run(tagString, itemId);
+}
+
+// ─────────────────────────────────────────────
 // ENDPOINT 1: GET /api/health
 // ─────────────────────────────────────────────
 router.get('/health', (req, res) => {
@@ -255,11 +647,62 @@ router.get('/health', (req, res) => {
     status: 'ok',
     service: 'easy-rewind Learning Assistant API',
     timestamp: new Date().toISOString(),
-    version: '2.0.0',
+    version: '2.0.1',
     storage: 'sqlite',
     storage_ready: dbOk,
     ai_configured: !!getGenAI(),
   });
+});
+
+router.post('/session', (req, res) => {
+  const { client_id, device, client_type } = req.body || {};
+  const userId = runtimeProfileUserId || 'anonymous';
+  return res.json({
+    user_id: userId,
+    client_id: sanitize(client_id || '', 120),
+    device: sanitize(device || '', 120),
+    client_type: sanitize(client_type || '', 80),
+    synced_at: new Date().toISOString(),
+  });
+});
+
+router.post('/users/merge', (req, res) => {
+  const database = getDb();
+  const targetUserId = sanitizeUserId(req.body?.to_user_id || runtimeProfileUserId);
+  const sourceUserId = sanitizeUserId(req.body?.from_user_id);
+
+  if (!sourceUserId || sourceUserId === targetUserId) {
+    return res.json({ success: true, merged: false, user_id: targetUserId });
+  }
+
+  const tables = {
+    bookmarks: ['user_id', 'url', 'title', 'topic', 'notes', 'remind_at', 'reminded', 'created_at'],
+    notes: ['user_id', 'content', 'source_url', 'source_title', 'remind_at', 'reminded', 'reminder_note', 'completed', 'created_at'],
+    highlights: ['user_id', 'url', 'page_title', 'text', 'context', 'color', 'tags', 'note', 'created_at'],
+    research_queue: ['user_id', 'url', 'title', 'user_notes', 'research_result', 'status', 'error_message', 'remind_when_done', 'created_at', 'completed_at'],
+    reminders: ['user_id', 'reminder_type', 'reference_type', 'reference_id', 'title', 'message', 'remind_at', 'reminded', 'dismissed', 'created_at', 'repeat_interval_days', 'repeat_count', 'max_repeats', 'next_review_at'],
+    search_log: ['user_id', 'query', 'found', 'created_at'],
+  };
+
+  const merged = {};
+  try {
+    for (const [table, columns] of Object.entries(tables)) {
+      const rows = database.prepare(`SELECT ${columns.join(', ')} FROM ${table} WHERE user_id = ?`).all(sourceUserId);
+      const insert = database.prepare(`INSERT OR IGNORE INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`);
+      const tx = database.transaction((rows) => {
+        for (const row of rows) {
+          const values = columns.map(col => col === 'user_id' ? targetUserId : row[col]);
+          insert.run(...values);
+        }
+      });
+      tx(rows);
+      merged[table] = rows.length;
+    }
+    return res.json({ success: true, merged: true, user_id: targetUserId, merged_counts: merged });
+  } catch (err) {
+    console.error('[Merge Users Error]', err.message);
+    return res.status(500).json({ error: 'Failed to merge users.' });
+  }
 });
 
 // ─────────────────────────────────────────────
@@ -386,7 +829,7 @@ Also suggest 2 related tech terms they might want to learn next as a JSON array 
 // ENDPOINT 3: POST /api/bookmark
 // ─────────────────────────────────────────────
 router.post('/bookmark', (req, res) => {
-  const { url, title, topic, notes, remind_at, remind_in_minutes } = req.body;
+  const { url, title, topic, notes, remind_at, remind_in_minutes, repeat_interval_days, max_repeats } = req.body;
   const user_id = getUserId(req);
 
   if (!url || typeof url !== 'string') {
@@ -400,9 +843,9 @@ router.post('/bookmark', (req, res) => {
     return res.status(400).json({ error: 'Invalid URL format.' });
   }
 
-  // Calculate remind_at if remind_in_minutes is provided
-  let remindAt = remind_at || null;
-  if (remind_in_minutes && !remindAt) {
+  // Calculate remind_at if remind_at or remind_in_minutes is provided
+  let remindAt = normalizeDate(remind_at);
+  if (remind_in_minutes !== undefined && remind_in_minutes !== '' && !remindAt) {
     remindAt = new Date(Date.now() + parseInt(remind_in_minutes) * 60000).toISOString();
   }
 
@@ -426,16 +869,16 @@ router.post('/bookmark', (req, res) => {
     // If a reminder was set, also create a reminder entry
     if (remindAt && bookmark) {
       try {
-        database.prepare(`
-          INSERT INTO reminders (user_id, reminder_type, reference_type, reference_id, title, message, remind_at)
-          VALUES (?, 'bookmark_review', 'bookmark', ?, ?, ?, ?)
-        `).run(
-          user_id,
-          bookmark.id,
-          `Review: ${sanitize(topic, 100)}`,
-          `Time to review your bookmark about ${sanitize(topic, 100)}`,
-          remindAt
-        );
+        createReminder(database, user_id, {
+          reminder_type: 'bookmark_review',
+          reference_type: 'bookmark',
+          reference_id: bookmark.id,
+          title: `Review: ${sanitize(topic, 100)}`,
+          message: `Time to review your bookmark about ${sanitize(topic, 100)}`,
+          remind_at: remindAt,
+          repeat_interval_days,
+          max_repeats,
+        });
       } catch (_) {}
     }
 
@@ -568,7 +1011,7 @@ router.delete('/bookmark/:id', (req, res) => {
 
 // POST /api/notes — Create a quick note
 router.post('/notes', (req, res) => {
-  const { content, source_url, source_title, remind_at, remind_in_minutes, reminder_note } = req.body;
+  const { content, source_url, source_title, remind_at, remind_in_minutes, reminder_note, repeat_interval_days, max_repeats } = req.body;
   const user_id = getUserId(req);
 
   if (!content || typeof content !== 'string' || content.trim().length === 0) {
@@ -581,8 +1024,8 @@ router.post('/notes', (req, res) => {
   }
 
   // Calculate remind_at
-  let remindAt = remind_at || null;
-  if (remind_in_minutes && !remindAt) {
+  let remindAt = normalizeDate(remind_at);
+  if (remind_in_minutes !== undefined && remind_in_minutes !== '' && !remindAt) {
     remindAt = new Date(Date.now() + parseInt(remind_in_minutes) * 60000).toISOString();
   }
 
@@ -606,16 +1049,16 @@ router.post('/notes', (req, res) => {
     // If a reminder was set, create a reminder entry
     if (remindAt && note) {
       try {
-        database.prepare(`
-          INSERT INTO reminders (user_id, reminder_type, reference_type, reference_id, title, message, remind_at)
-          VALUES (?, 'note_action', 'note', ?, ?, ?, ?)
-        `).run(
-          user_id,
-          note.id,
-          '📝 ' + (sanitize(reminder_note || cleanContent, 100)),
-          cleanContent.slice(0, 200),
-          remindAt
-        );
+        createReminder(database, user_id, {
+          reminder_type: 'note_action',
+          reference_type: 'note',
+          reference_id: note.id,
+          title: '📝 ' + (sanitize(reminder_note || cleanContent, 100)),
+          message: cleanContent.slice(0, 200),
+          remind_at: remindAt,
+          repeat_interval_days,
+          max_repeats,
+        });
       } catch (_) {}
     }
 
@@ -699,7 +1142,7 @@ router.delete('/notes/:id', (req, res) => {
 
 // POST /api/reminders — Schedule a reminder
 router.post('/reminders', (req, res) => {
-  const { title, message, remind_at, remind_in_minutes, reminder_type, reference_type, reference_id } = req.body;
+  const { title, message, remind_at, remind_in_minutes, reminder_type, reference_type, reference_id, repeat_interval_days, max_repeats } = req.body;
   const user_id = getUserId(req);
 
   if (!title || typeof title !== 'string') {
@@ -707,8 +1150,8 @@ router.post('/reminders', (req, res) => {
   }
 
   // Calculate remind_at
-  let remindAt = remind_at || null;
-  if (remind_in_minutes && !remindAt) {
+  let remindAt = normalizeDate(remind_at);
+  if (remind_in_minutes !== undefined && remind_in_minutes !== '' && !remindAt) {
     remindAt = new Date(Date.now() + parseInt(remind_in_minutes) * 60000).toISOString();
   }
 
@@ -719,18 +1162,16 @@ router.post('/reminders', (req, res) => {
   const database = getDb();
 
   try {
-    const info = database.prepare(`
-      INSERT INTO reminders (title, message, remind_at, reminder_type, reference_type, reference_id, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      sanitize(title, 200),
-      sanitize(message || '', 500),
-      remindAt,
-      sanitize(reminder_type || 'custom', 50),
-      reference_type || null,
-      reference_id || null,
-      user_id
-    );
+    const info = createReminder(database, user_id, {
+      title,
+      message,
+      remind_at: remindAt,
+      reminder_type,
+      reference_type,
+      reference_id,
+      repeat_interval_days,
+      max_repeats,
+    });
 
     const reminder = database.prepare('SELECT * FROM reminders WHERE id = ?').get(info.lastInsertRowid);
     return res.json({ success: true, reminder });
@@ -1038,11 +1479,12 @@ router.post('/check-reminders', (req, res) => {
     });
     markReminded(ids);
 
-    // Group by user and log push notifications
+    // Group by user and log push notifications; schedule next spaced review if configured
     const byUser = {};
     for (const reminder of dueReminders) {
       if (!byUser[reminder.user_id]) byUser[reminder.user_id] = [];
       byUser[reminder.user_id].push(reminder);
+      scheduleNextReview(database, reminder);
     }
 
     for (const [userId, reminders] of Object.entries(byUser)) {
@@ -1068,16 +1510,23 @@ router.post('/check-reminders', (req, res) => {
 // POST /api/page-summary — Generate an AI summary of the current page
 router.post('/page-summary', async (req, res) => {
   const { url, title, description, text_content } = req.body;
+  const textPieces = [
+    title && typeof title === 'string' ? `Title: ${title}` : '',
+    description && typeof description === 'string' ? `Description: ${description}` : '',
+    text_content && typeof text_content === 'string' ? text_content : '',
+  ].filter(Boolean).join('\n\n');
 
-  if (!text_content || typeof text_content !== 'string' || text_content.trim().length < 20) {
-    return res.status(400).json({ error: 'Not enough page content to summarize.' });
+  if (!textPieces || textPieces.trim().length < 20) {
+    return res.status(400).json({ error: 'Not enough page content to summarize. Try a longer article or reload the page.' });
   }
 
   // Check AI availability
   if (!getGenAI()) {
     return res.json({
-      summary: `**${title || 'Page'}**\n\nTo enable AI summaries, add your GEMINI_API_KEY to the backend .env file or configure it in the extension settings.`,
+      summary: `**${title || 'Page'}**\n\nTo enable remote AI summaries, add your GEMINI_API_KEY to the backend .env file or configure it in the extension settings.`,
       source: 'stub',
+      title: title || 'Page Summary',
+      url: url || '',
     });
   }
 
@@ -1089,7 +1538,7 @@ Page URL: ${url || 'Unknown'}
 Meta Description: ${description || 'N/A'}
 
 Page Content:
-${text_content.slice(0, 6000)}
+${textPieces.slice(0, 12000)}
 
 Provide:
 1. **Brief Summary** — 2-3 sentences capturing the core topic
@@ -1218,6 +1667,63 @@ router.delete('/highlights/:id', (req, res) => {
   }
 });
 
+router.get('/review-digest', (req, res) => {
+  try {
+    const database = getDb();
+    const uid = getUserId(req);
+    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const recentLimit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+    const bookmarks = database.prepare(`
+      SELECT id, url, title, topic, notes, created_at
+      FROM bookmarks
+      WHERE user_id = ? AND created_at >= ?
+      ORDER BY created_at DESC LIMIT ?
+    `).all(uid, since, recentLimit);
+    const notes = database.prepare(`
+      SELECT id, content, source_url, source_title, created_at
+      FROM notes
+      WHERE user_id = ? AND created_at >= ? AND completed = 0
+      ORDER BY created_at DESC LIMIT ?
+    `).all(uid, since, recentLimit);
+    const highlights = database.prepare(`
+      SELECT id, url, page_title, text, color, created_at
+      FROM highlights
+      WHERE user_id = ? AND created_at >= ?
+      ORDER BY created_at DESC LIMIT ?
+    `).all(uid, since, recentLimit);
+    const dueReminders = database.prepare(`
+      SELECT id, reminder_type, reference_type, title, message, remind_at
+      FROM reminders
+      WHERE user_id = ? AND reminded = 0 AND dismissed = 0 AND remind_at <= ?
+      ORDER BY remind_at ASC LIMIT ?
+    `).all(uid, new Date().toISOString(), recentLimit);
+
+    const reviewItems = [
+      ...bookmarks.map(item => ({ type: 'bookmark', title: item.title || item.topic, detail: item.topic, url: item.url, created_at: item.created_at })),
+      ...notes.map(item => ({ type: 'note', title: item.source_title || 'Note', detail: item.content.slice(0, 160), url: item.source_url || '', created_at: item.created_at })),
+      ...highlights.map(item => ({ type: 'highlight', title: item.page_title || 'Highlight', detail: item.text.slice(0, 160), url: item.url, color: item.color, created_at: item.created_at })),
+    ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, recentLimit);
+
+    return res.json({
+      days,
+      generated_at: new Date().toISOString(),
+      stats: {
+        bookmarks: bookmarks.length,
+        notes: notes.length,
+        highlights: highlights.length,
+        due_reminders: dueReminders.length,
+      },
+      due_reminders: dueReminders,
+      review_items: reviewItems,
+    });
+  } catch (err) {
+    console.error('[Review Digest Error]', err.message);
+    return res.status(500).json({ error: 'Failed to generate review digest.' });
+  }
+});
+
 // ═════════════════════════════════════════════
 // EXPORT / IMPORT ENDPOINTS
 // ═════════════════════════════════════════════
@@ -1332,15 +1838,20 @@ router.get('/settings', (req, res) => {
   return res.json({
     ai_configured: !!getGenAI(),
     model: runtimeModel,
+    api_base_url: runtimeApiBaseUrl,
+    summarization_backend: runtimeSummarizationBackend,
+    spaced_review_enabled: runtimeSpacedReviewEnabled,
+    review_interval_days: runtimeReviewIntervalDays,
+    embed_provider: runtimeEmbedProvider,
     has_runtime_key: !!runtimeApiKey,
     has_env_key: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here',
     settings_file_exists: fs.existsSync(SETTINGS_PATH),
   });
 });
 
-// POST /api/settings — Update runtime settings (API key, AI model) — persists to disk
+// POST /api/settings — Update runtime settings — persists to disk
 router.post('/settings', (req, res) => {
-  const { gemini_api_key, ai_model } = req.body;
+  const { gemini_api_key, ai_model, api_base_url, summarization_backend, spaced_review_enabled, review_interval_days, embed_provider } = req.body;
 
   if (gemini_api_key !== undefined) {
     runtimeApiKey = gemini_api_key || null;
@@ -1351,19 +1862,644 @@ router.post('/settings', (req, res) => {
     runtimeModel = ai_model || 'gemini-2.5-flash';
   }
 
+  if (api_base_url !== undefined) {
+    runtimeApiBaseUrl = api_base_url.replace(/\/+$/, '') || 'http://localhost:5000';
+  }
+
+  if (summarization_backend !== undefined) {
+    const allowed = ['auto', 'chrome', 'local', 'gemini', 'backend'];
+    runtimeSummarizationBackend = allowed.includes(summarization_backend) ? summarization_backend : 'auto';
+  }
+
+  if (spaced_review_enabled !== undefined) {
+    runtimeSpacedReviewEnabled = !!spaced_review_enabled;
+  }
+
+  if (review_interval_days !== undefined) {
+    runtimeReviewIntervalDays = Math.max(1, parseInt(review_interval_days) || 3);
+  }
+
+  if (embed_provider !== undefined) {
+    const allowed = ['auto', 'gemini', 'openai'];
+    runtimeEmbedProvider = allowed.includes(embed_provider) ? embed_provider : 'auto';
+  }
+
   // Persist to disk so it survives server restarts
   saveSettings();
 
   console.log('[Settings] Runtime config updated:', {
     ai_configured: !!runtimeApiKey || !!process.env.GEMINI_API_KEY,
     model: runtimeModel,
+    summarization_backend: runtimeSummarizationBackend,
+    spaced_review_enabled: runtimeSpacedReviewEnabled,
   });
 
   return res.json({
     success: true,
     ai_configured: !!getGenAI(),
     model: runtimeModel,
+    api_base_url: runtimeApiBaseUrl,
+    summarization_backend: runtimeSummarizationBackend,
+    spaced_review_enabled: runtimeSpacedReviewEnabled,
+    review_interval_days: runtimeReviewIntervalDays,
   });
+});
+
+// ═════════════════════════════════════════════
+// NEW: SUMMARIZE ENDPOINT
+// ═════════════════════════════════════════════
+
+// POST /api/summarize — Generate an AI summary of provided text
+router.post('/summarize', async (req, res) => {
+  const { text, max_sentences, style } = req.body;
+
+  if (!text || typeof text !== 'string' || text.trim().length < 10) {
+    return res.status(400).json({ error: 'Please provide at least 10 characters of text to summarize.' });
+  }
+
+  const cleanText = sanitize(text, 12000);
+
+  try {
+    const result = await summarizeText(cleanText, { maxSentences: parseInt(max_sentences) || 3, style: style || 'concise' });
+
+    if (!result.success) {
+      console.error('[Summarize Error]', result.error);
+      return res.status(502).json({ error: `Summarization failed: ${result.error}`, fallback: cleanText.slice(0, 500) });
+    }
+
+    return res.json({
+      success: true,
+      summary: result.summary,
+      source: 'ai',
+      model: runtimeModel,
+      length: result.summary.length,
+    });
+  } catch (err) {
+    console.error('[Summarize Critical Error]', err.message);
+    return res.status(500).json({ error: 'Summarization service unavailable.', fallback: cleanText.slice(0, 500) });
+  }
+});
+
+// ═════════════════════════════════════════════
+// NEW: ITEMS ENDPOINTS (Unified Save + Sync)
+// ═════════════════════════════════════════════
+
+// POST /api/items — Save a new item with summary, embedding, tags
+router.post('/items', async (req, res) => {
+  const { url, title, content, skip_summary, skip_embedding, skip_tags } = req.body;
+  const user_id = getUserId(req);
+
+  if (!content && !url) {
+    return res.status(400).json({ error: 'Provide at least content or a URL to save.' });
+  }
+
+  const cleanContent = sanitize(content || '', 50000);
+  const cleanTitle = sanitize(title || url || 'Untitled', 500);
+  const cleanUrl = sanitize(url || '', 2000);
+
+  const database = getDb();
+
+  try {
+    // Step 1: Insert the item
+    const info = database.prepare(`
+      INSERT INTO items (user_id, url, title, content, created_at, updated_at)
+      VALUES (?, ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
+    `).run(user_id, cleanUrl, cleanTitle, cleanContent);
+    const itemId = info.lastInsertRowid;
+
+    // Step 2: Generate summary (parallel with embedding)
+    let summary = '';
+    let tags = [];
+    let embedding = null;
+
+    const summaryPromise = skip_summary
+      ? Promise.resolve('')
+      : summarizeText(cleanContent || cleanTitle)
+          .then(r => { summary = r.success ? r.summary : ''; })
+          .catch(err => { console.warn('[Items] Summary failed:', err.message); });
+
+    const embeddingPromise = skip_embedding
+      ? Promise.resolve()
+      : generateEmbedding(cleanContent || cleanTitle)
+          .then(vec => { embedding = vec; })
+          .catch(err => { console.warn('[Items] Embedding failed:', err.message); });
+
+    await Promise.all([summaryPromise, embeddingPromise]);
+
+    // Step 3: Update item with summary
+    database.prepare('UPDATE items SET summary = ?, updated_at = (strftime(\'%Y-%m-%dT%H:%M:%S\', \'now\') || \'Z\') WHERE id = ?')
+      .run(summary || '', itemId);
+
+    // Step 4: Store embedding if generated
+    if (embedding && Array.isArray(embedding)) {
+      try {
+        database.prepare(`
+          INSERT OR REPLACE INTO item_embeddings (item_id, embedding, model)
+          VALUES (?, ?, ?)
+        `).run(itemId, JSON.stringify(embedding), runtimeApiKey?.startsWith('sk-') ? 'openai' : 'gemini');
+      } catch (embedErr) {
+        console.warn('[Items] Embedding storage failed:', embedErr.message);
+      }
+    }
+
+    // Step 5: Auto-tag if not skipped
+    if (!skip_tags) {
+      try {
+        const tagResult = await generateTags((summary || cleanContent || cleanTitle));
+        if (tagResult.success && tagResult.tags.length > 0) {
+          tags = tagResult.tags;
+          storeItemTags(database, itemId, tags, user_id);
+        }
+      } catch (tagErr) {
+        console.warn('[Items] Auto-tagging failed:', tagErr.message);
+      }
+    }
+
+    // Return the created item
+    const item = database.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+    return res.json({
+      success: true,
+      item,
+      tags,
+      has_summary: !!summary,
+      has_embedding: !!embedding,
+    });
+  } catch (err) {
+    console.error('[Items Save Error]', err.message);
+    return res.status(500).json({ error: 'Failed to save item.' });
+  }
+});
+
+// GET /api/items — List items with optional ?since= param for sync
+router.get('/items', (req, res) => {
+  const user_id = getUserId(req);
+  const since = req.query.since || null;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const offset = parseInt(req.query.offset) || 0;
+
+  const database = getDb();
+
+  try {
+    let query, params;
+    if (since) {
+      // Sync: return items updated since the given timestamp
+      const sinceDate = normalizeDate(since);
+      if (!sinceDate) return res.status(400).json({ error: 'Invalid since timestamp. Use ISO 8601 format.' });
+      query = `SELECT * FROM items WHERE user_id = ? AND updated_at > ? ORDER BY updated_at ASC LIMIT ? OFFSET ?`;
+      params = [user_id, sinceDate, limit, offset];
+    } else {
+      query = `SELECT * FROM items WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+      params = [user_id, limit, offset];
+    }
+
+    const items = database.prepare(query).all(...params);
+    const total = database.prepare('SELECT COUNT(*) as count FROM items WHERE user_id = ?').get(user_id).count;
+
+    // Normalize timestamps for client consumption (ensure 'Z' suffix)
+    for (const item of items) {
+      if (item.created_at && !item.created_at.endsWith('Z')) item.created_at += 'Z';
+      if (item.updated_at && !item.updated_at.endsWith('Z')) item.updated_at += 'Z';
+    }
+
+    return res.json({ items: items || [], total, since: since || null });
+  } catch (err) {
+    console.error('[Items List Error]', err.message);
+    return res.status(500).json({ error: 'Failed to load items.' });
+  }
+});
+
+// DELETE /api/items/:id — Delete an item and its embeddings/tags
+router.delete('/items/:id', (req, res) => {
+  const { id } = req.params;
+  const user_id = getUserId(req);
+  const database = getDb();
+
+  try {
+    const item = database.prepare('SELECT id FROM items WHERE id = ? AND user_id = ?').get(id, user_id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+
+    database.prepare('DELETE FROM items WHERE id = ? AND user_id = ?').run(id, user_id);
+    // CASCADE deletes remove embeddings and tags
+    return res.json({ success: true, message: 'Item deleted.' });
+  } catch (err) {
+    console.error('[Items Delete Error]', err.message);
+    return res.status(500).json({ error: 'Failed to delete item.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// NEW: ITEM INTERACTION (Memory Score)
+// ═════════════════════════════════════════════
+
+// PATCH /api/items/:id/interact — Record interaction, bumps memory_score
+router.patch('/items/:id/interact', (req, res) => {
+  const { id } = req.params;
+  const user_id = getUserId(req);
+  const action = req.body.action || 'view'; // view, click, search, review
+  const database = getDb();
+
+  try {
+    const item = database.prepare('SELECT id, memory_score, interaction_count FROM items WHERE id = ? AND user_id = ?').get(id, user_id);
+    if (!item) return res.status(404).json({ error: 'Item not found.' });
+
+    // Score increments by action type
+    const actionPoints = {
+      view:    0.2,
+      click:   0.5,
+      search:  1.0,
+      review:  2.0,
+      link:    0.3,
+    };
+    const increment = actionPoints[action] || 0.2;
+    const newScore = Math.min((item.memory_score || 0) + increment, 100);
+    const newCount = (item.interaction_count || 0) + 1;
+    const now = new Date().toISOString();
+
+    database.prepare(`
+      UPDATE items
+      SET memory_score = ?, interaction_count = ?, last_interacted_at = ?, updated_at = ?
+      WHERE id = ? AND user_id = ?
+    `).run(newScore, newCount, now, now, id, user_id);
+
+    return res.json({
+      success: true,
+      item_id: parseInt(id),
+      memory_score: newScore,
+      interaction_count: newCount,
+      action,
+    });
+  } catch (err) {
+    console.error('[Interact Error]', err.message);
+    return res.status(500).json({ error: 'Failed to record interaction.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// NEW: VECTOR SEARCH ENDPOINT
+// ═════════════════════════════════════════════
+
+// GET /api/items/search — Hybrid search: semantic + recency + memory_score + frequency
+router.get('/items/search', async (req, res) => {
+  const query = req.query.q;
+  const user_id = getUserId(req);
+
+  if (!query || query.trim().length === 0) {
+    return res.status(400).json({ error: 'Search query is required.' });
+  }
+
+  const cleanQuery = sanitize(query, 500);
+  const database = getDb();
+
+  try {
+    // Step 1: Generate embedding for the query
+    let queryEmbedding;
+    try {
+      queryEmbedding = await generateEmbedding(cleanQuery);
+    } catch (embedErr) {
+      console.warn('[Hybrid Search] Embedding failed, falling back to keyword:', embedErr.message);
+    }
+
+    // Helper: normalize recency (0..1, 1 = today, 0 = 365+ days ago)
+    const daysToRecency = (days) => Math.max(0, Math.min(1, 1 - (days / 365)));
+    const now = Date.now();
+
+    // Helper: normalize memory_score (0..100 → 0..1)
+    const normalizeScore = (s) => Math.min(1, (s || 0) / 50);
+
+    // Helper: normalize interaction frequency (capped at 20)
+    const normalizeFreq = (c) => Math.min(1, (c || 0) / 20);
+
+    const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
+    // ── Phase A: Vector + hybrid scoring ──────────────────────
+    let results = [];
+
+    if (queryEmbedding && Array.isArray(queryEmbedding)) {
+      const embeddings = database.prepare(`
+        SELECT ie.item_id, ie.embedding, i.title, i.summary, i.content, i.tags, i.url,
+               i.created_at, i.memory_score, i.interaction_count, i.last_interacted_at
+        FROM item_embeddings ie
+        JOIN items i ON i.id = ie.item_id
+        WHERE i.user_id = ?
+      `).all(user_id);
+
+      const scored = [];
+      for (const row of embeddings) {
+        const storedVec = parseEmbedding(row.embedding);
+        if (!storedVec) continue;
+
+        const sim = cosineSimilarity(queryEmbedding, storedVec);
+        if (sim < 0.05) continue; // Hard floor — unrelated items
+
+        const ageMs = now - new Date(row.created_at).getTime();
+        const recency = daysToRecency(ageMs / (24 * 60 * 60 * 1000));
+        const memScore = normalizeScore(row.memory_score);
+        const frequency = normalizeFreq(row.interaction_count);
+
+        // 40% semantic + 30% recency + 20% memory_score + 10% frequency
+        const hybridScore = (0.40 * sim) + (0.30 * recency) + (0.20 * memScore) + (0.10 * frequency);
+
+        scored.push({
+          id: row.item_id,
+          title: row.title || '',
+          summary: row.summary || '',
+          content: row.content ? row.content.slice(0, 300) : '',
+          tags: row.tags || '',
+          url: row.url || '',
+          similarity: Math.round(sim * 1000) / 1000,
+          recency: Math.round(recency * 1000) / 1000,
+          memory_score: row.memory_score || 0,
+          interaction_count: row.interaction_count || 0,
+          score: Math.round(hybridScore * 1000) / 1000,
+          created_at: row.created_at,
+        });
+      }
+
+      scored.sort((a, b) => b.score - a.score);
+      results = scored.slice(0, 15);
+    }
+
+    // ── Phase B: Keyword fallback (also scored) ───────────────
+    if (results.length < 3) {
+      const pattern = `%${cleanQuery}%`;
+      const keywordResults = database.prepare(`
+        SELECT id, title, summary, content, tags, url, created_at,
+               memory_score, interaction_count, last_interacted_at,
+               CASE
+                 WHEN LOWER(title) LIKE LOWER(?) THEN 1.0
+                 WHEN LOWER(summary) LIKE LOWER(?) THEN 0.8
+                 WHEN LOWER(content) LIKE LOWER(?) THEN 0.5
+                 WHEN LOWER(tags) LIKE LOWER(?) THEN 0.7
+                 ELSE 0.3
+               END as kw_score
+        FROM items
+        WHERE user_id = ?
+          AND (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?) OR LOWER(content) LIKE LOWER(?) OR LOWER(tags) LIKE LOWER(?))
+        ORDER BY kw_score DESC
+        LIMIT 15
+      `).all(pattern, pattern, pattern, pattern, user_id, pattern, pattern, pattern, pattern);
+
+      // De-duplicate against vector results
+      const existingIds = new Set(results.map(r => r.id));
+      const seenIds = new Set();
+
+      for (const r of keywordResults) {
+        if (existingIds.has(r.id) || seenIds.has(r.id)) continue;
+        seenIds.add(r.id);
+
+        const ageMs = now - new Date(r.created_at).getTime();
+        const recency = daysToRecency(ageMs / (24 * 60 * 60 * 1000));
+        const memScore = normalizeScore(r.memory_score);
+        const freq = normalizeFreq(r.interaction_count);
+
+        const hybridScore = (0.40 * (r.kw_score || 0.3))
+                          + (0.30 * recency)
+                          + (0.20 * memScore)
+                          + (0.10 * freq);
+
+        results.push({
+          id: r.id,
+          title: r.title || '',
+          summary: r.summary || '',
+          content: r.content ? r.content.slice(0, 300) : '',
+          tags: r.tags || '',
+          url: r.url || '',
+          similarity: 0,
+          recency: Math.round(recency * 1000) / 1000,
+          memory_score: r.memory_score || 0,
+          interaction_count: r.interaction_count || 0,
+          score: Math.round(hybridScore * 1000) / 1000,
+          created_at: r.created_at,
+        });
+      }
+    }
+
+    // Sort final results by hybrid score
+    results.sort((a, b) => b.score - a.score);
+    results = results.slice(0, 15);
+
+    return res.json({
+      results,
+      count: results.length,
+      query: cleanQuery,
+      hybrid: true,
+    });
+  } catch (err) {
+    console.error('[Hybrid Search Error]', err.message);
+    return res.status(500).json({ error: 'Search failed.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// NEW: RAG ASK ENDPOINT
+// ═════════════════════════════════════════════
+
+// GET /api/ask — Answer a question using RAG over saved items
+router.get('/ask', async (req, res) => {
+  const query = req.query.q;
+  const user_id = getUserId(req);
+
+  if (!query || query.trim().length === 0) {
+    return res.status(400).json({ error: 'Please provide a question via ?q=...' });
+  }
+
+  const cleanQuery = sanitize(query, 1000);
+  const database = getDb();
+
+  try {
+    // Step 1: Search for relevant items (reuse vector search if available)
+    let searchResults = [];
+    try {
+      const searchParam = new URLSearchParams({ q: cleanQuery });
+      // We embed the query and search locally
+      const queryEmbedding = await generateEmbedding(cleanQuery).catch(() => null);
+
+      if (queryEmbedding && Array.isArray(queryEmbedding)) {
+        const embeddings = database.prepare(`
+          SELECT ie.item_id, ie.embedding, i.title, i.summary, i.content, i.url
+          FROM item_embeddings ie
+          JOIN items i ON i.id = ie.item_id
+          WHERE i.user_id = ?
+        `).all(user_id);
+
+        const scored = [];
+        for (const row of embeddings) {
+          const storedVec = parseEmbedding(row.embedding);
+          if (!storedVec) continue;
+          const score = cosineSimilarity(queryEmbedding, storedVec);
+          if (score > 0.15) {
+            scored.push({ ...row, score });
+          }
+        }
+        scored.sort((a, b) => b.score - a.score);
+        searchResults = scored.slice(0, 5);
+      }
+
+      // Fallback keyword search if vector search found nothing
+      if (searchResults.length === 0) {
+        const pattern = `%${cleanQuery}%`;
+        searchResults = database.prepare(`
+          SELECT id as item_id, title, summary, content, url FROM items
+          WHERE user_id = ?
+            AND (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?) OR LOWER(content) LIKE LOWER(?) OR LOWER(tags) LIKE LOWER(?))
+          ORDER BY created_at DESC
+          LIMIT 5
+        `).all(user_id, pattern, pattern, pattern, pattern);
+      }
+    } catch (searchErr) {
+      console.warn('[Ask] Search phase failed:', searchErr.message);
+    }
+
+    // Step 2: Build RAG prompt
+    let ragPrompt;
+    if (searchResults.length === 0) {
+      // No context found — answer from general knowledge
+      ragPrompt = `You are a helpful knowledge assistant. The user has asked a question but there are no saved items matching it yet.
+
+Question: "${cleanQuery}"
+
+Answer the question based on your general knowledge. Keep your answer concise (2-4 sentences). If you're not confident about the answer, say so.`;
+    } else {
+      const context = searchResults.map((r, i) =>
+        `[${i + 1}] Title: ${r.title || 'Untitled'}\nSummary: ${r.summary || 'N/A'}\nURL: ${r.url || 'N/A'}`
+      ).join('\n\n');
+
+      ragPrompt = `You are a helpful knowledge assistant. Answer the user's question based ONLY on the context from their saved items below. If the context doesn't contain enough information to answer fully, say so — don't make things up.
+
+Context from saved items:
+${context}
+
+Question: "${cleanQuery}"
+
+Answer concisely (2-4 sentences). If helpful, reference which saved item(s) the answer comes from.`;
+    }
+
+    // Step 3: Generate answer via LLM
+    const ai = getGenAI();
+    if (!ai) {
+      return res.json({
+        answer: searchResults.length > 0
+          ? `Found ${searchResults.length} relevant saved items. Enable AI (GEMINI_API_KEY) for generative answers.`
+          : 'AI not configured. Set GEMINI_API_KEY in .env for AI-powered answers.',
+        sources: searchResults.map(r => ({ title: r.title, url: r.url })),
+        source_count: searchResults.length,
+      });
+    }
+
+    const answer = await callGemini(ragPrompt);
+
+    return res.json({
+      answer: answer || 'Could not generate an answer.',
+      sources: searchResults.map(r => ({
+        title: r.title || 'Untitled',
+        url: r.url || '',
+        summary: r.summary || '',
+        score: r.score || null,
+      })),
+      source_count: searchResults.length,
+      query: cleanQuery,
+    });
+  } catch (err) {
+    console.error('[Ask RAG Error]', err.message);
+    return res.status(500).json({ error: 'Failed to generate answer.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// NEW: AUTO-TAGGING ENDPOINT
+// ═════════════════════════════════════════════
+
+// POST /api/tag — Generate tags for provided text
+router.post('/tag', async (req, res) => {
+  const { text, max_tags } = req.body;
+
+  if (!text || typeof text !== 'string' || text.trim().length < 5) {
+    return res.status(400).json({ error: 'Please provide text (at least 5 chars) to extract tags from.' });
+  }
+
+  const cleanText = sanitize(text, 5000);
+
+  try {
+    const result = await generateTags(cleanText, { maxTags: parseInt(max_tags) || 5 });
+
+    if (!result.success) {
+      return res.status(502).json({ error: `Tagging failed: ${result.error}` });
+    }
+
+    return res.json({
+      success: true,
+      tags: result.tags,
+      count: result.tags.length,
+    });
+  } catch (err) {
+    console.error('[Tag Error]', err.message);
+    return res.status(500).json({ error: 'Tagging service unavailable.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// CLIENT-SIDE ERROR LOGGING
+// ═════════════════════════════════════════════
+
+// POST /api/log — Accept client-side error reports for server-side logging
+router.post('/log', (req, res) => {
+  const { level, component, message, stack, data } = req.body;
+  const user_id = getUserId(req);
+  const ts = new Date().toISOString();
+
+  const prefix = `[${ts}] [${level || 'INFO'}] [${component || 'client'}] (${user_id.slice(0, 20)}...)`;
+  const stackStr = stack ? `\nStack: ${stack.slice(0, 500)}` : '';
+  const dataStr = data ? ` ${JSON.stringify(data).slice(0, 500)}` : '';
+
+  switch (level) {
+    case 'ERROR':
+      console.error(`${prefix} ${message}${dataStr}${stackStr}`);
+      break;
+    case 'WARN':
+      console.warn(`${prefix} ${message}${dataStr}`);
+      break;
+    default:
+      console.log(`${prefix} ${message}${dataStr}`);
+  }
+
+  // Persist to database for later review
+  try {
+    const database = getDb();
+    database.prepare(`
+      INSERT INTO error_log (user_id, level, component, message, stack, metadata)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      user_id,
+      (level || 'INFO').slice(0, 10),
+      (component || 'client').slice(0, 50),
+      (message || '').slice(0, 500),
+      (stack || '').slice(0, 2000),
+      data ? JSON.stringify(data).slice(0, 2000) : null
+    );
+  } catch (_) { /* Log persistence is best-effort */ }
+
+  return res.json({ success: true });
+});
+
+// GET /api/logs — Retrieve recent error logs (for admin/dashboard)
+router.get('/logs', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const level = req.query.level || null;
+  try {
+    const database = getDb();
+    let query = 'SELECT * FROM error_log';
+    const params = [];
+    if (level) {
+      query += ' WHERE level = ?';
+      params.push(level.toUpperCase());
+    }
+    query += ' ORDER BY created_at DESC LIMIT ?';
+    params.push(limit);
+    const logs = database.prepare(query).all(...params);
+    return res.json({ logs: logs || [], total: logs.length });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to load logs.' });
+  }
 });
 
 module.exports = router;

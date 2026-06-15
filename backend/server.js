@@ -71,19 +71,26 @@ app.use(generalLimiter);
 // ─────────────────────────────────────────────
 // Body Parsing Middleware
 // ─────────────────────────────────────────────
-app.use(express.json({ limit: '10kb' }));
+app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─────────────────────────────────────────────
-// Request Logging (development only)
+// Request Logging with timing
 // ─────────────────────────────────────────────
-if (process.env.NODE_ENV === 'development') {
-  app.use((req, res, next) => {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] ${req.method} ${req.path}`);
-    next();
+app.use((req, res, next) => {
+  const start = Date.now();
+  const timestamp = new Date().toISOString();
+
+  // Capture response finish
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const level = res.statusCode >= 400 ? 'WARN' : 'INFO';
+    const emoji = res.statusCode >= 500 ? '❌' : res.statusCode >= 400 ? '⚠️' : '✅';
+    console.log(`${emoji} [${timestamp}] ${req.method} ${req.originalUrl} → ${res.statusCode} (${duration}ms)`);
   });
-}
+
+  next();
+});
 
 // ─────────────────────────────────────────────
 // Serve Dashboard Website

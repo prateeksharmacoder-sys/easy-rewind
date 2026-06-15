@@ -30,5 +30,13 @@ desktop.ini
 dist/
 build/
 
+# Database (auto-created by SQLite)
+*.db
+*.db-shm
+*.db-wal
+
+# Runtime settings (contains API keys)
+backend/data/settings.json
+
 # Extension icons (generated files)
 # extension/icons/*.png

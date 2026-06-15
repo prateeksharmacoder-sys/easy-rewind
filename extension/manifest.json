@@ -48,6 +48,10 @@
     "https://*/*"
   ],
 
+  "omnibox": {
+    "keyword": "er"
+  },
+
   "commands": {
     "_execute_action": {
       "suggested_key": {

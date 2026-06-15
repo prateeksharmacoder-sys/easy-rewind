@@ -213,17 +213,44 @@ async function apiCall(path, options = {}) {
 // ─────────────────────────────────────────────
 
 async function initUserId() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['easy_rewind_user_id'], (result) => {
-      if (result.easy_rewind_user_id) {
-        userId = result.easy_rewind_user_id;
-      } else {
-        userId = 'user_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        chrome.storage.local.set({ easy_rewind_user_id: userId });
+  // First get the local device-specific client_id
+  let clientId = await new Promise(resolve =>
+    chrome.storage.local.get(['easy_rewind_user_id'], result => {
+      if (result.easy_rewind_user_id) resolve(result.easy_rewind_user_id);
+      else {
+        const id = 'user_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        chrome.storage.local.set({ easy_rewind_user_id: id });
+        resolve(id);
       }
-      resolve(userId);
+    })
+  );
+
+  // Try to get a canonical shared user_id from the server (unifies extension, dashboard, desktop)
+  try {
+    const baseUrl = await new Promise(resolve =>
+      chrome.storage.local.get({ easy_rewind_api_base: DEFAULT_API_BASE }, result =>
+        resolve((result.easy_rewind_api_base || DEFAULT_API_BASE).replace(/\/+$/, ''))
+      )
+    );
+    const sessionResp = await fetch(`${baseUrl}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, client_type: 'extension' }),
     });
-  });
+    if (sessionResp.ok) {
+      const session = await sessionResp.json();
+      userId = session.user_id;
+      // Persist the canonical id locally so it survives chrome.storage.local clears
+      chrome.storage.local.set({ easy_rewind_user_id: userId });
+    } else {
+      userId = clientId;
+    }
+  } catch {
+    // Server offline — fall back to local client ID
+    userId = clientId;
+  }
+
+  return userId;
 }
 
 async function getCurrentPageInfo() {
@@ -274,8 +301,10 @@ async function init() {
 
   // Check if we were asked to open a specific tab
   chrome.storage.local.get(['easy_rewind_open_tab'], (result) => {
-    if (result.easy_rewind_open_tab) {
-      switchTab(result.easy_rewind_open_tab);
+    const tab = result.easy_rewind_open_tab;
+    if (tab) {
+      // Map 'save' → 'bookmark' (auto-capture notification opens to bookmark tab)
+      switchTab(tab === 'save' ? 'bookmark' : tab);
       chrome.storage.local.remove('easy_rewind_open_tab');
     }
   });
@@ -336,6 +365,33 @@ async function init() {
       chrome.storage.local.remove('easy_rewind_pending_lookup');
       switchTab('search');
       setTimeout(handleLookup, 200);
+    }
+  });
+
+  // ═══ Smart Auto-Capture: pending save from engagement prompt ═══
+  chrome.storage.local.get(['easy_rewind_pending_auto_save'], async (result) => {
+    const pending = result.easy_rewind_pending_auto_save;
+    if (pending) {
+      // Pre-fill bookmark tab with the page info
+      currentPageUrl = pending.url || currentPageUrl;
+      currentPageTitle = pending.title || currentPageTitle;
+      els.pageTitleDisplay.textContent = truncate(currentPageTitle, 60);
+      els.pageUrlDisplay.textContent = truncate(currentPageUrl, 70);
+      els.topicInput.value = currentPageTitle.slice(0, 100);
+      els.topicInput.focus();
+
+      // Show a status about why the popup opened
+      const mins = Math.round(pending.engagement?.elapsed_min || 0);
+      const depth = pending.engagement?.max_scroll_depth || 0;
+      showStatus(els.bookmarkStatus,
+        `🧠 Captured from your reading session (${mins}min, ${depth}% scroll) — review and save`,
+        'success', 8000);
+
+      // Switch to bookmark tab
+      switchTab('bookmark');
+
+      // Clear the pending data (don't re-trigger)
+      chrome.storage.local.remove('easy_rewind_pending_auto_save');
     }
   });
 
@@ -586,31 +642,59 @@ async function handleSummarizePage() {
       }
     }
 
-    // If we got text from the content script but it's short, use metadata
-    if (!pageData.textContent || pageData.textContent.length < 20) {
-      if (pageData.description) {
-        showStatus(els.searchStatus, 'Page has limited extractable content. Using description...', 'loading');
-        pageData.textContent = pageData.description;
-      } else {
-        throw new Error('This page does not have enough content to summarize. Try a different page.');
+    // Build combined text from title + description + page text safely
+    const combinedText = [
+      pageData.title && `Title: ${pageData.title}`,
+      pageData.description && `Description: ${pageData.description}`,
+      pageData.textContent,
+    ].filter(Boolean).join('\n\n').trim();
+
+    // If we got text but it's too short, surface a clear error
+    if (!combinedText || combinedText.length < 20) {
+      throw new Error('This page does not have enough content to summarize. Try a different page.');
+    }
+
+    // Try Chrome Summarizer API first, fall back to backend
+    let summary = null;
+    let source = null;
+
+    if (window.ai?.summarizer || 'Summarizer' in window) {
+      try {
+        showStatus(els.searchStatus, 'Using on-device AI...', 'loading');
+        const summarizer = await window.ai.summarizer.create({
+          type: 'tl;dr',
+          format: 'plain-text',
+          length: 'medium',
+        });
+        summary = await summarizer.summarize(combinedText.slice(0, 12000));
+        source = 'local-ai';
+      } catch (summErr) {
+        console.log('[Summarize] On-device summarizer failed, falling back to backend:', summErr.message);
       }
     }
 
-    showStatus(els.searchStatus, 'Generating AI summary...', 'loading');
+    if (!summary) {
+      showStatus(els.searchStatus, 'Generating AI summary...', 'loading');
+      const data = await apiCall('/page-summary', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: pageData.url,
+          title: pageData.title,
+          description: pageData.description,
+          text_content: pageData.textContent.slice(0, 12000),
+        }),
+      });
+      summary = data.summary;
+      source = data.source;
+    }
 
-    const data = await apiCall('/page-summary', {
-      method: 'POST',
-      body: JSON.stringify(pageData),
-    });
-
-    if (data.summary) {
-      els.summaryDef.innerHTML = formatSummary(data.summary);
-      els.summaryMeta.textContent = data.source === 'ai' ? 'Generated by AI' : 'Summary';
+    if (summary) {
+      els.summaryDef.innerHTML = formatSummary(summary);
+      els.summaryMeta.textContent = source === 'local-ai' ? 'Generated by on-device AI' : source === 'ai' ? 'Generated by AI' : 'Summary';
       els.summaryCard.classList.add('visible');
-      els.definitionCard?.classList.remove('visible');
       hideStatus(els.searchStatus);
     } else {
-      throw new Error(data.error || 'No summary returned');
+      throw new Error('No summary returned');
     }
   } catch (err) {
     showStatus(els.searchStatus, err.message || 'Failed to generate summary.', 'error', 5000);
@@ -710,7 +794,8 @@ async function handleSaveBookmark() {
     els.researchToggle.checked = false;
     selectedBookmarkReminderMinutes = null;
     els.bookmarkReminderPresets.forEach((b) => b.classList.remove('active'));
-    historyLoaded = false;
+    // Refresh server-side data in the history tab if it's already loaded
+    if (historyLoaded) loadAllBookmarks();
   } catch (err) {
     showStatus(els.bookmarkStatus, err.message || 'Failed to save.', 'error', 5000);
   } finally {
@@ -1008,7 +1093,7 @@ async function loadAllBookmarks() {
   try {
     const [bmData, hlData] = await Promise.all([
       apiCall('/bookmarks?limit=100'),
-      apiCall('/highlights/stats'),
+      apiCall('/highlights/stats').catch(() => ({ total: 0 })), // don't block on highlights failure
     ]);
     els.totalBookmarksStat.textContent = bmData.stats?.total_bookmarks ?? bmData.total ?? 0;
     els.uniqueTopicsStat.textContent = bmData.stats?.unique_topics ?? '—';
@@ -1101,6 +1186,11 @@ async function loadResearchResults() {
     renderResearch(data.research || []);
   } catch (err) {
     console.warn('[Load Research Error]', err.message);
+    els.researchList.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">⚠️</div>
+      <div class="empty-title">Could not load research</div>
+      <div class="empty-subtitle">${escapeHtml(err.message || 'Is the server running?')}</div>
+    </div>`;
   }
 }
 
@@ -1185,24 +1275,44 @@ async function searchSavedContent(term) {
   }
 
   try {
-    const data = await apiCall(`/search?q=${encodeURIComponent(term)}`);
-    const bookmarks = data.results || [];
-    const notes = data.notes || [];
+    // Search both existing bookmarks/notes and new items via vector search
+    const [bmData, itemsData] = await Promise.all([
+      apiCall(`/search?q=${encodeURIComponent(term)}`).catch(() => null),
+      apiCall(`/items/search?q=${encodeURIComponent(term)}`).catch(() => null),
+    ]);
 
-    if (bookmarks.length === 0 && notes.length === 0) {
+    const bookmarks = bmData?.results || [];
+    const notes = bmData?.notes || [];
+    const items = itemsData?.results || [];
+
+    if (bookmarks.length === 0 && notes.length === 0 && items.length === 0) {
       els.searchSavedResults.style.display = 'none';
       return;
     }
 
     let html = '';
 
+    // Show vector search results first (items)
+    if (items.length > 0) {
+      html += items.slice(0, 5).map(item => `
+        <div class="list-item" data-url="${escapeHtml(item.url)}" style="cursor:pointer;">
+          <div class="list-item-topic">🧬 ${escapeHtml(item.title || 'Untitled')}</div>
+          <div class="list-item-title">${escapeHtml(truncate(item.summary || item.content || '', 80))}</div>
+          ${item.tags ? `<div class="list-item-tags" style="font-size:9px;color:var(--text-muted);margin-top:2px;">🏷 ${escapeHtml(item.tags)}</div>` : ''}
+          <div class="list-item-meta">
+            <span class="list-item-date">✨ ${formatRelativeTime(item.created_at)}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
     if (bookmarks.length > 0) {
       html += bookmarks.slice(0, 5).map(bm => `
         <div class="list-item" data-url="${escapeHtml(bm.url)}" style="cursor:pointer;">
-          <div class="list-item-topic">${escapeHtml(bm.topic)}</div>
+          <div class="list-item-topic">🔖 ${escapeHtml(bm.topic)}</div>
           <div class="list-item-title">${escapeHtml(truncate(bm.title || bm.url, 55))}</div>
           <div class="list-item-meta">
-            <span class="list-item-date">🔖 ${formatRelativeTime(bm.created_at)}</span>
+            <span class="list-item-date">${formatRelativeTime(bm.created_at)}</span>
           </div>
         </div>
       `).join('');
@@ -1211,9 +1321,9 @@ async function searchSavedContent(term) {
     if (notes.length > 0) {
       html += notes.slice(0, 3).map(note => `
         <div class="list-item" style="cursor:default;">
-          <div class="list-item-content">${escapeHtml(truncate(note.content, 80))}</div>
+          <div class="list-item-content">📝 ${escapeHtml(truncate(note.content, 80))}</div>
           <div class="list-item-meta">
-            <span class="list-item-date">📝 ${formatRelativeTime(note.created_at)}</span>
+            <span class="list-item-date">${formatRelativeTime(note.created_at)}</span>
           </div>
         </div>
       `).join('');
@@ -1222,7 +1332,7 @@ async function searchSavedContent(term) {
     els.searchSavedList.innerHTML = html;
     els.searchSavedResults.style.display = 'block';
 
-    // Wire up click-to-open for bookmarks
+    // Wire up click-to-open for items/links
     els.searchSavedList.querySelectorAll('.list-item[data-url]').forEach(item => {
       item.addEventListener('click', () => {
         const url = item.dataset.url;
@@ -1255,10 +1365,30 @@ function openSettings() {
     easy_rewind_api_base: DEFAULT_API_BASE,
     easy_rewind_api_key: '',
     easy_rewind_ai_model: 'gemini-2.5-flash',
+    easy_rewind_embed_provider: 'auto',
+    easy_rewind_auto_capture: { enabled: true, minMinutes: 5, minScrollPct: 80 },
   }, (result) => {
     $('settings-api-url').value = result.easy_rewind_api_base || DEFAULT_API_BASE;
     $('settings-api-key').value = result.easy_rewind_api_key || '';
     $('settings-ai-model').value = result.easy_rewind_ai_model || 'gemini-2.5-flash';
+    $('settings-embed-provider').value = result.easy_rewind_embed_provider || 'auto';
+    const ac = result.easy_rewind_auto_capture || {};
+    if ($('settings-auto-capture')) $('settings-auto-capture').checked = ac.enabled !== false;
+    // Try to load backend settings for new fields
+    try {
+      const base = (result.easy_rewind_api_base || DEFAULT_API_BASE).replace(/\/+$/, '');
+      fetch(`${base}/api/settings`)
+        .then(r => r.json())
+        .then(settings => {
+          if (settings.summarization_backend && $('settings-summ-backend'))
+            $('settings-summ-backend').value = settings.summarization_backend;
+          if ($('settings-spaced-review'))
+            $('settings-spaced-review').checked = !!settings.spaced_review_enabled;
+          if (settings.review_interval_days && $('settings-review-interval'))
+            $('settings-review-interval').value = settings.review_interval_days.toString();
+        })
+        .catch(() => { /* backend offline, keep defaults */ });
+    } catch (_) {}
     $('settings-overlay').classList.add('open');
   });
 }
@@ -1271,20 +1401,43 @@ function saveSettings() {
   const apiUrl = $('settings-api-url').value.trim() || DEFAULT_API_BASE;
   const apiKey = $('settings-api-key').value.trim();
   const aiModel = $('settings-ai-model').value.trim() || 'gemini-2.5-flash';
+  const summBackend = $('settings-summ-backend')?.value || 'auto';
+  const spacedReview = $('settings-spaced-review')?.checked || false;
+  const reviewInterval = parseInt($('settings-review-interval')?.value) || 3;
+  const embedProvider = $('settings-embed-provider')?.value || 'auto';
+  const autoCaptureEnabled = $('settings-auto-capture')?.checked !== false;
+
+  // Build auto-capture settings object
+  const autoCaptureSettings = { enabled: autoCaptureEnabled, minMinutes: 5, minScrollPct: 80 };
 
   chrome.storage.local.set({
     easy_rewind_api_base: apiUrl,
     easy_rewind_api_key: apiKey,
     easy_rewind_ai_model: aiModel,
+    easy_rewind_embed_provider: embedProvider,
+    easy_rewind_auto_capture: autoCaptureSettings,
   }, () => {
-    // Sync API key to backend if provided
-    if (apiKey) {
-      fetch(`${apiUrl.replace(/\/+$/, '')}/api/settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-        body: JSON.stringify({ gemini_api_key: apiKey, ai_model: aiModel }),
-      }).catch(() => {});
-    }
+    // Sync all settings to backend
+    fetch(`${apiUrl.replace(/\/+$/, '')}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      body: JSON.stringify({
+        gemini_api_key: apiKey || null,
+        ai_model: aiModel,
+        api_base_url: apiUrl,
+        summarization_backend: summBackend,
+        spaced_review_enabled: spacedReview,
+        review_interval_days: reviewInterval,
+        embed_provider: embedProvider,
+      }),
+    }).catch(() => {});
+    // Sync auto-capture settings to background.js runtime
+    try {
+      chrome.runtime.sendMessage({
+        type: 'AUTO_CAPTURE_SETTINGS',
+        settings: autoCaptureSettings,
+      });
+    } catch (_) {}
     showStatus(els.searchStatus, '✅ Settings saved!', 'success', 3000);
     closeSettings();
   });

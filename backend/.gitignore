@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/easy-rewind.db
+data/*.db
+data/settings.json
+.DS_Store
+*.log

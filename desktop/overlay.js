@@ -8,6 +8,11 @@
 const API = window.easyRewind;
 
 // ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let desktopSettings = { apiBase: 'http://localhost:5000', apiKey: '', aiModel: 'gemini-2.5-flash', reminderMinutes: 60 };
+
+// ─────────────────────────────────────────────
 // DOM REFS
 // ─────────────────────────────────────────────
 const els = {
@@ -31,6 +36,15 @@ const els = {
   globalStatus: document.getElementById('global-status'),
 
   closeBtn: document.getElementById('close-btn'),
+
+  // Settings
+  settingsBtn: document.getElementById('settings-btn'),
+  settingsOverlay: document.getElementById('settings-overlay'),
+  settingsCancel: document.getElementById('settings-cancel'),
+  settingsSave: document.getElementById('settings-save'),
+  settingsApiUrl: document.getElementById('settings-api-url'),
+  settingsApiKey: document.getElementById('settings-api-key'),
+  settingsReminderMin: document.getElementById('settings-reminder-min'),
 };
 
 // ─────────────────────────────────────────────
@@ -117,12 +131,13 @@ async function handleSaveNote() {
   els.saveNoteBtn.innerHTML = '<span class="spinner"></span> Saving...';
 
   try {
+    const remindMins = desktopSettings.reminderMinutes || 60;
     await API.apiCall('/notes', {
       method: 'POST',
-      body: { content, remind_in_minutes: 60 },
+      body: { content, remind_in_minutes: remindMins },
     });
 
-    showStatus(els.noteStatus, '✅ Thought saved!', 'success', 3000);
+    showStatus(els.noteStatus, `✅ Thought saved! (reminder in ${remindMins >= 1440 ? Math.floor(remindMins/1440)+'d' : remindMins >= 60 ? Math.floor(remindMins/60)+'h' : remindMins+'min'})`, 'success', 3000);
     els.noteInput.value = '';
   } catch (err) {
     showStatus(els.noteStatus, err.message || 'Failed to save', 'error', 3000);
@@ -223,6 +238,42 @@ function formatTime(dateStr) {
 }
 
 // ─────────────────────────────────────────────
+// SETTINGS MODAL
+// ─────────────────────────────────────────────
+async function openSettings() {
+  try {
+    const settings = await API.getSettings();
+    if (settings) desktopSettings = settings;
+  } catch (_) {}
+  els.settingsApiUrl.value = desktopSettings.apiBase || 'http://localhost:5000';
+  els.settingsApiKey.value = desktopSettings.apiKey || '';
+  els.settingsReminderMin.value = desktopSettings.reminderMinutes || 60;
+  els.settingsOverlay.classList.add('open');
+}
+
+function closeSettings() {
+  els.settingsOverlay.classList.remove('open');
+}
+
+async function saveSettings() {
+  desktopSettings.apiBase = els.settingsApiUrl.value.trim() || 'http://localhost:5000';
+  desktopSettings.apiKey = els.settingsApiKey.value.trim();
+  desktopSettings.reminderMinutes = parseInt(els.settingsReminderMin.value) || 60;
+  try {
+    await API.setSettings(desktopSettings);
+    showStatus(els.globalStatus, '✅ Settings saved!', 'success', 2000);
+  } catch (_) {}
+  closeSettings();
+}
+
+els.settingsBtn.addEventListener('click', openSettings);
+els.settingsCancel.addEventListener('click', closeSettings);
+els.settingsSave.addEventListener('click', saveSettings);
+els.settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === els.settingsOverlay) closeSettings();
+});
+
+// ─────────────────────────────────────────────
 // CLOSE BUTTON
 // ─────────────────────────────────────────────
 els.closeBtn.addEventListener('click', () => API.hideOverlay());
@@ -231,11 +282,21 @@ els.closeBtn.addEventListener('click', () => API.hideOverlay());
 // GLOBAL KEYBOARD
 // ─────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') API.hideOverlay();
+  if (e.key === 'Escape' && !els.settingsOverlay.classList.contains('open')) {
+    API.hideOverlay();
+  } else if (e.key === 'Escape') {
+    closeSettings();
+  }
 });
 
 // ─────────────────────────────────────────────
 // BOOT
 // ─────────────────────────────────────────────
-// Focus search input
-els.searchInput.focus();
+// Load saved settings, then focus search
+(async () => {
+  try {
+    const settings = await API.getSettings();
+    if (settings) desktopSettings = settings;
+  } catch (_) {}
+  els.searchInput.focus();
+})();

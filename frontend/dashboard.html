@@ -13,6 +13,28 @@
        DESIGN SYSTEM — Modern Glass Edition
     ══════════════════════════════════════════════ */
     :root {
+      /* Shared easy-rewind design tokens */
+      --er-bg: #06060e;
+      --er-surface: rgba(18, 18, 38, 0.85);
+      --er-card: rgba(26, 26, 52, 0.7);
+      --er-input: rgba(34, 34, 62, 0.65);
+      --er-primary: #8b5cf6;
+      --er-primary-strong: #7c3aed;
+      --er-text: #f5f3ff;
+      --er-text-secondary: #c4b5fd;
+      --er-text-muted: #6b6890;
+      --er-border: rgba(139, 92, 246, 0.12);
+      --er-border-focus: rgba(167, 139, 250, 0.5);
+      --er-accent-green: #34d399;
+      --er-accent-amber: #f59e0b;
+      --er-accent-red: #ef4444;
+      --er-accent-pink: #ec4899;
+      --er-radius-sm: 10px;
+      --er-radius-md: 14px;
+      --er-radius-lg: 20px;
+      --er-shadow: 0 4px 28px rgba(0,0,0,0.35);
+      --er-glow: 0 0 32px rgba(124, 58, 237, 0.15);
+
       --bg-0: #06060e;
       --bg-1: rgba(12, 12, 26, 0.9);
       --bg-2: rgba(18, 18, 38, 0.85);
@@ -303,6 +325,41 @@
     }
 
     .stat-card:hover::before { opacity: 1; }
+
+    /* Reminder widget */
+    .reminder-section {
+      background: var(--bg-card);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow-card);
+    }
+    .reminder-header-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+    }
+    .reminder-section-icon { font-size: 18px; }
+    .reminder-section-title { font-weight: 600; font-size: 14px; flex: 1; }
+    .reminder-section-badge {
+      background: var(--er-primary); color: #fff; border-radius: 24px;
+      padding: 2px 10px; font-size: 12px; font-weight: 700; min-width: 24px; text-align: center;
+    }
+    .reminder-dismiss-all {
+      background: transparent; border: 1px solid var(--glass-border);
+      color: var(--text-300); padding: 4px 12px; border-radius: var(--radius-sm); font-size: 12px; cursor: pointer;
+    }
+    .reminder-dismiss-all:hover { border-color: var(--glass-border-md); color: var(--text-100); background: var(--bg-card-hover); }
+    .reminder-list { display: flex; flex-direction: column; gap: 8px; }
+    .reminder-item {
+      display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+      background: var(--bg-2); border-radius: var(--radius-md); border: 1px solid var(--glass-border);
+    }
+    .reminder-item:hover { border-color: var(--glass-border-md); }
+    .reminder-item-body { flex: 1; min-width: 0; }
+    .reminder-item-title { font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .reminder-item-meta { font-size: 11px; color: var(--text-400); margin-top: 2px; }
+    .reminder-item-btn { background: transparent; border: none; color: var(--accent-green); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 6px; line-height: 1; }
+    .reminder-empty { color: var(--text-400); font-size: 13px; text-align: center; padding: 16px 0; }
 
     .stat-icon {
       font-size: 22px;
@@ -1278,6 +1335,19 @@
     </section>
 
     <!-- ══════════════════════════════════════
+         DUE REMINDERS WIDGET
+    ══════════════════════════════════════ -->
+    <section class="reminder-section" id="reminder-section" style="display:none;" aria-label="Due reminders">
+      <div class="reminder-header-row">
+        <span class="reminder-section-icon">⏰</span>
+        <span class="reminder-section-title">Due Reminders</span>
+        <span class="reminder-section-badge" id="reminder-count-badge">0</span>
+        <button class="reminder-dismiss-all" id="reminder-dismiss-all" title="Dismiss all due reminders" style="display:none;">✓ Dismiss All</button>
+      </div>
+      <div id="reminder-list" class="reminder-list"></div>
+    </section>
+
+    <!-- ══════════════════════════════════════
          TOOLBAR
     ══════════════════════════════════════ -->
     <div class="toolbar" role="search" aria-label="Bookmark search and filters">
@@ -1471,13 +1541,41 @@
     // ─────────────────────────────────────────────
 
     function getUserId() {
-      let id = localStorage.getItem(USER_ID_KEY);
+      // Use the same storage key prefix as extension for cross-surface sync
+      let id = localStorage.getItem('easy_rewind_user_id') || localStorage.getItem(USER_ID_KEY);
       if (!id) {
         id = 'dash_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         localStorage.setItem(USER_ID_KEY, id);
       }
       userId = id;
       return id;
+    }
+
+    // Try to resolve to a canonical shared user ID from the server (runs once)
+    let sessionResolved = false;
+    function resolveSession() {
+      if (sessionResolved) return;
+      sessionResolved = true;
+      try {
+        const base = API_BASE.replace(/\/api$/, '');
+        const currentId = userId;
+        fetch(`${base}/api/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ client_id: currentId, client_type: 'dashboard' }),
+        })
+          .then(r => r.json())
+          .then(session => {
+            if (session.user_id && session.user_id !== currentId) {
+              userId = session.user_id;
+              localStorage.setItem('easy_rewind_user_id', userId);
+              // Reload data with new canonical user ID
+              loadBookmarks();
+              checkHealth();
+            }
+          })
+          .catch(() => {});
+      } catch (_) {}
     }
 
     async function apiCall(path, opts = {}) {
@@ -2112,7 +2210,7 @@
               <div class="research-title">${escapeHtml(r.title || 'Untitled')}</div>
               <div class="research-url">${escapeHtml(r.url)}</div>
               ${r.user_notes ? `<div style="font-size:11px;color:var(--text-400);font-style:italic;margin-bottom:6px;">📝 ${escapeHtml(r.user_notes)}</div>` : ''}
-              ${r.research_result ? `<button class="action-btn toggle-research-btn" style="margin-bottom:6px;">📖 ${D2._researchVisible?.[r.id] ? 'Hide' : 'View'} Analysis</button><div class="research-result ${D2._researchVisible?.[r.id] ? 'visible' : ''}">${r.research_result}</div>` : ''}
+              ${r.research_result ? `<button class="action-btn toggle-research-btn" style="margin-bottom:6px;">📖 View Analysis</button><div class="research-result">${r.research_result}</div>` : ''}
               ${r.status === 'failed' && r.error_message ? `<div style="font-size:11px;color:#f87171;">Error: ${escapeHtml(r.error_message)}</div>` : ''}
               <div class="research-footer">
                 <span class="research-status-badge ${statusClass}">${r.status}</span>
@@ -2123,7 +2221,6 @@
         }).join('');
 
         // Toggle research results visibility
-        D2._researchVisible = D2._researchVisible || {};
         D2.researchGrid.querySelectorAll('.toggle-research-btn').forEach((btn, idx) => {
           btn.addEventListener('click', () => {
             const card = btn.closest('.research-card');
@@ -2203,8 +2300,62 @@
           apiCall('/notes?limit=1'),
           apiCall('/research?limit=1'),
         ]);
-        // Stats already handled by computeStats for bookmarks
-        // Notes count is shown in the notes badge on the extension
+      } catch {}
+    }
+
+    // ── Load due reminders ──
+    async function loadReminders() {
+      try {
+        const data = await apiCall('/reminders?due=true&limit=20');
+        const section = document.getElementById('reminder-section');
+        const list = document.getElementById('reminder-list');
+        const badge = document.getElementById('reminder-count-badge');
+        const dismissAll = document.getElementById('reminder-dismiss-all');
+
+        if (!data.reminders || data.reminders.length === 0) {
+          section.style.display = 'none';
+          return;
+        }
+
+        section.style.display = 'block';
+        badge.textContent = data.reminders.length;
+        dismissAll.style.display = data.reminders.length > 1 ? 'inline-block' : 'none';
+
+        list.innerHTML = data.reminders.map(r => `
+          <div class="reminder-item" data-id="${r.id}">
+            <span class="reminder-item-icon">${r.reminder_type === 'bookmark_review' ? '🔖' : r.reminder_type === 'note_action' ? '📝' : '⏰'}</span>
+            <div class="reminder-item-body">
+              <div class="reminder-item-title">${escapeHtml(r.title || 'Reminder')}</div>
+              <div class="reminder-item-meta">${r.message ? escapeHtml(r.message).slice(0, 120) : ''} · due ${formatDate(r.remind_at)}</div>
+            </div>
+            <button class="reminder-item-btn mark-reminder-done" title="Mark as done" data-id="${r.id}">✓</button>
+          </div>
+        `).join('');
+
+        list.querySelectorAll('.mark-reminder-done').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            try {
+              await apiCall(`/reminders/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ reminded: true }),
+              });
+              btn.closest('.reminder-item').remove();
+              if (list.querySelectorAll('.reminder-item').length === 0) {
+                section.style.display = 'none';
+              }
+            } catch (err) {
+              showToast('Failed to dismiss reminder', 'error');
+            }
+          });
+        });
+
+        // Use onclick assignment (not addEventListener) to avoid handler stacking every 60s
+        dismissAll.onclick = async () => {
+          for (const btn of list.querySelectorAll('.mark-reminder-done')) {
+            btn.click();
+          }
+        };
       } catch {}
     }
 
@@ -2214,9 +2365,12 @@
     getUserId();
     checkHealth();
     loadBookmarks();
+    loadReminders();
+    resolveSession(); // canonical ID from server (fires once)
 
-    // Refresh health check every 30 seconds
+    // Refresh health check every 30 seconds, reminders every 60
     setInterval(checkHealth, 30000);
+    setInterval(loadReminders, 60000);
   </script>
 </body>
 </html>

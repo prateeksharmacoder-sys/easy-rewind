@@ -28,13 +28,41 @@ let tray = null;
 let overlayWindow = null;
 let reminderInterval = null;
 let userId = null;
+let desktopSettings = { apiBase: '', apiKey: '', aiModel: 'gemini-2.5-flash', reminderMinutes: 60 };
+
+function getEffectiveApiBase() {
+  return (desktopSettings.apiBase && desktopSettings.apiBase.trim())
+    ? desktopSettings.apiBase.replace(/\/+$/, '')
+    : 'http://localhost:5000';
+}
+
+const DESKTOP_SETTINGS_PATH = path.join(app.getPath('userData'), 'desktop-settings.json');
+
+function loadDesktopSettings() {
+  try {
+    if (fs.existsSync(DESKTOP_SETTINGS_PATH)) {
+      const raw = fs.readFileSync(DESKTOP_SETTINGS_PATH, 'utf8');
+      const saved = JSON.parse(raw);
+      desktopSettings = { ...desktopSettings, ...saved };
+    }
+  } catch (_) {}
+}
+
+function saveDesktopSettings() {
+  try {
+    const dir = path.dirname(DESKTOP_SETTINGS_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DESKTOP_SETTINGS_PATH, JSON.stringify(desktopSettings, null, 2));
+  } catch (_) {}
+}
 
 // ─────────────────────────────────────────────
 // UTILITY: API Calls
 // ─────────────────────────────────────────────
 function apiCall(path, options = {}) {
   return new Promise((resolve, reject) => {
-    const url = new URL(`${API_BASE}${path}`);
+    const effectiveBase = getEffectiveApiBase() + '/api';
+    const url = new URL(`${effectiveBase}${path}`);
     const httpOptions = {
       hostname: url.hostname,
       port: url.port,
@@ -133,6 +161,13 @@ function createOverlayWindow() {
       return { error: err.message };
     }
   });
+
+  ipcMain.handle('get-settings', () => ({ ...desktopSettings }));
+  ipcMain.handle('set-settings', (event, newSettings) => {
+    desktopSettings = { ...desktopSettings, ...newSettings };
+    saveDesktopSettings();
+    return { ...desktopSettings };
+  });
 }
 
 // ─────────────────────────────────────────────
@@ -226,7 +261,7 @@ function createTray() {
     { type: 'separator' },
     {
       label: '📊 Open Dashboard',
-      click: () => require('electron').shell.openExternal('http://localhost:5000/dashboard'),
+      click: () => require('electron').shell.openExternal(`${getEffectiveApiBase()}/dashboard`),
     },
     { type: 'separator' },
     {
@@ -255,6 +290,7 @@ function createTray() {
 // APP LIFECYCLE
 // ─────────────────────────────────────────────
 app.whenReady().then(() => {
+  loadDesktopSettings();
   // Register global shortcut
   const shortcut = globalShortcut.register('Ctrl+Shift+Space', () => {
     toggleOverlay();
@@ -300,6 +336,26 @@ app.whenReady().then(() => {
   console.log('✅ easy-rewind Desktop App running');
   console.log(`   User ID: ${userId.slice(0, 20)}...`);
   console.log('   Shortcut: Ctrl+Shift+Space to open overlay');
+
+  // Resolve canonical shared user ID from the server
+  fetch(`${getEffectiveApiBase()}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: userId, client_type: 'desktop' }),
+  }).then(r => r.json()).then(session => {
+    if (session.user_id && session.user_id !== userId) {
+      userId = session.user_id;
+      config.easy_rewind_user_id = userId;
+      try {
+        fs.writeFileSync(storePath, JSON.stringify(config, null, 2));
+      } catch (err) {
+        console.warn('[Store] Could not save session user_id:', err.message);
+      }
+      console.log(`   Canonical user_id resolved: ${userId.slice(0, 20)}...`);
+    }
+  }).catch(() => {
+    console.log('[Session] Could not reach server, using local user ID.');
+  });
 
   // Auto-open overlay on first launch
   if (isDev) {

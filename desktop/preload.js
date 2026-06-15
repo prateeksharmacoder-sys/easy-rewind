@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('easyRewind', {
   hideOverlay: () => ipcRenderer.send('hide-overlay'),
   openInBrowser: (url) => ipcRenderer.send('open-in-browser', url),
   apiCall: (path, options = {}) => ipcRenderer.invoke('api-call', { path, ...options }),
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  setSettings: (settings) => ipcRenderer.invoke('set-settings', settings),
 });

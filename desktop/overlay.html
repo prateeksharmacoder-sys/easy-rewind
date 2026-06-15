@@ -8,22 +8,45 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg-primary: #0f0f1a;
-      --bg-secondary: #161627;
-      --bg-card: #1e1e35;
-      --bg-input: #252540;
-      --bg-hover: #2a2a4a;
-      --accent-purple: #7c3aed;
-      --accent-violet: #8b5cf6;
-      --accent-green: #34d399;
-      --text-primary: #f1f0ff;
-      --text-secondary: #a9a5c8;
-      --text-muted: #6b6890;
-      --border: rgba(139, 92, 246, 0.2);
-      --border-focus: rgba(139, 92, 246, 0.6);
-      --glow: 0 0 20px rgba(124, 58, 237, 0.3);
-      --radius-sm: 8px;
-      --radius-md: 12px;
+      /* Shared easy-rewind design tokens */
+      --er-bg: #0f0f1a;
+      --er-surface: #161627;
+      --er-card: #1e1e35;
+      --er-input: #252540;
+      --er-hover: #2a2a4a;
+      --er-primary: #7c3aed;
+      --er-primary-strong: #6d28d9;
+      --er-accent-purple: #8b5cf6;
+      --er-accent-green: #34d399;
+      --er-accent-amber: #f59e0b;
+      --er-accent-red: #ef4444;
+      --er-accent-pink: #ec4899;
+      --er-text: #f1f0ff;
+      --er-text-secondary: #a9a5c8;
+      --er-text-muted: #6b6890;
+      --er-border: rgba(139, 92, 246, 0.2);
+      --er-border-focus: rgba(139, 92, 246, 0.6);
+      --er-radius-sm: 8px;
+      --er-radius-md: 12px;
+      --er-radius-lg: 18px;
+      --er-shadow: 0 0 20px rgba(124, 58, 237, 0.3);
+
+      --bg-primary: var(--er-bg);
+      --bg-secondary: var(--er-surface);
+      --bg-card: var(--er-card);
+      --bg-input: var(--er-input);
+      --bg-hover: var(--er-hover);
+      --accent-purple: var(--er-primary);
+      --accent-violet: var(--er-accent-purple);
+      --accent-green: var(--er-accent-green);
+      --text-primary: var(--er-text);
+      --text-secondary: var(--er-text-secondary);
+      --text-muted: var(--er-text-muted);
+      --border: var(--er-border);
+      --border-focus: var(--er-border-focus);
+      --glow: var(--er-shadow);
+      --radius-sm: var(--er-radius-sm);
+      --radius-md: var(--er-radius-md);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -228,6 +251,57 @@
     .status.success { color: var(--accent-green); }
     .status.error { color: #f87171; }
 
+    /* Settings modal */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.65);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--er-surface);
+      border: 1px solid var(--er-border);
+      border-radius: var(--er-radius-md);
+      padding: 20px;
+      width: 90%;
+      max-width: 340px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+    .modal-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+    .modal-field { margin-bottom: 10px; }
+    .modal-field label { display: block; font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .modal-field input, .modal-field select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--er-border);
+      border-radius: var(--er-radius-sm);
+      padding: 9px 12px;
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+    }
+    .modal-field input:focus, .modal-field select:focus {
+      border-color: var(--border-focus);
+      box-shadow: var(--er-shadow);
+    }
+    .modal-field select option { background: #1a1a30; color: var(--text-primary); }
+    .modal-actions { display: flex; gap: 8px; margin-top: 14px; }
+    .modal-btn {
+      flex: 1; padding: 9px; border: none; border-radius: var(--er-radius-sm);
+      font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif;
+      transition: all 0.2s;
+    }
+    .modal-btn.primary { background: linear-gradient(135deg, var(--er-primary), #6366f1); color: white; }
+    .modal-btn.primary:hover { opacity: 0.9; }
+    .modal-btn.secondary { background: var(--bg-card); border: 1px solid var(--er-border); color: var(--text-secondary); }
+    .modal-btn.secondary:hover { background: var(--bg-hover); }
+
     .spinner {
       display: inline-block;
       width: 12px;
@@ -259,7 +333,10 @@
           <div class="header-subtitle">Press Esc to close</div>
         </div>
       </div>
-      <button class="close-btn" id="close-btn">✕</button>
+      <div style="display:flex;gap:6px;">
+        <button class="close-btn" id="settings-btn" title="Settings">⚙</button>
+        <button class="close-btn" id="close-btn">✕</button>
+      </div>
     </div>
 
     <!-- Search (always visible) -->
@@ -306,6 +383,29 @@
 
     <div class="status" id="global-status"></div>
     <div class="footer-note">Ctrl+Shift+Space to toggle · Esc to close</div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settings-overlay">
+    <div class="modal">
+      <div class="modal-title">⚙ Settings</div>
+      <div class="modal-field">
+        <label for="settings-api-url">API Server URL</label>
+        <input type="url" id="settings-api-url" placeholder="http://localhost:5000" autocomplete="off" />
+      </div>
+      <div class="modal-field">
+        <label for="settings-api-key">Gemini API Key</label>
+        <input type="password" id="settings-api-key" placeholder="Leave blank to use server .env" autocomplete="off" />
+      </div>
+      <div class="modal-field">
+        <label for="settings-reminder-min">Default Reminder (minutes)</label>
+        <input type="number" id="settings-reminder-min" placeholder="60" min="1" />
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn secondary" id="settings-cancel">Cancel</button>
+        <button class="modal-btn primary" id="settings-save">💾 Save</button>
+      </div>
+    </div>
   </div>
 
   <script src="overlay.js"></script>
