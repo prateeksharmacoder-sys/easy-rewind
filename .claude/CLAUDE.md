@@ -69,6 +69,25 @@ easy-rewind/
 | `POST` | `/research` | Queue AI deep-research on a URL |
 | `GET` | `/research` | Get research results |
 | `POST` | `/check-reminders` | Process due reminders |
+| `POST` | `/items` | Save item with AI summary + tags + embedding |
+| `GET` | `/items` | List items (optional `?since=` for sync) |
+| `DELETE` | `/items/:id` | Delete an item |
+| `GET` | `/items/search?q=` | Hybrid search (semantic + recency + memory_score) |
+| `GET` | `/items/:id/related` | Related items via embedding similarity |
+| `PATCH` | `/items/:id/interact` | Track interaction (read/highlight/share/revisit) |
+| `POST` | `/items/:id/connect` | Create manual connection between items |
+| `GET` | `/items/:id/connections` | All connections for an item |
+| `DELETE` | `/connections/:id` | Remove a connection |
+| `POST` | `/connections/discover` | Auto-discover connections (tag overlap + LLM) |
+| `GET` | `/knowledge-graph` | Full graph data (nodes + edges for viz) |
+| `POST` | `/summarize` | AI text summarization |
+| `POST` | `/tag` | Auto-tag content |
+| `POST` | `/log` | Client error logging |
+| `GET` | `/logs` | View error logs |
+| `GET` | `/export` | Export all user data as JSON |
+| `POST` | `/import` | Import data from JSON export |
+
+**Headers**: All endpoints accept `x-user-id` for user identity.
 
 **Headers**: All endpoints accept `x-user-id` for user identity.
 
@@ -109,7 +128,12 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ## Database (auto-created in `backend/data/easy-rewind.db`)
 
-7 tables: `bookmarks`, `cache`, `search_log`, `notes`, `reminders`, `push_subscriptions`, `research_queue`.
+11 tables: `bookmarks`, `cache`, `search_log`, `notes`, `reminders`, `push_subscriptions`, `research_queue`, `highlights`, `items`, `memory_connections`, `error_log`.
+
+- `items` — AI memory layer: URL content, AI summary, tags, embedding, source_type, memory_score (0-1), interaction tracking
+- `memory_connections` — Knowledge Graph edges: bidirectional item links with relationship type + confidence
+- `highlights` — User text selections with context + tags
+- `error_log` — Client-side error capture
 
 Refer to `database/setup.sql` for the full schema.
 

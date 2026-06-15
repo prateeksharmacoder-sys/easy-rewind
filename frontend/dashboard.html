@@ -1397,6 +1397,7 @@
       <button class="dashboard-tab" data-tab="notes" role="tab" aria-selected="false">📝 Notes</button>
       <button class="dashboard-tab" data-tab="research" role="tab" aria-selected="false">🧠 Research</button>
       <button class="dashboard-tab" data-tab="highlights" role="tab" aria-selected="false">🖍 Highlights</button>
+      <button class="dashboard-tab" data-tab="knowledge-graph" role="tab" aria-selected="false">🕸️ Knowledge Graph</button>
     </div>
 
     <!-- Bookmarks tab -->
@@ -1437,6 +1438,35 @@
     <main id="highlights-container" class="bookmarks-container content-panel" aria-label="Highlights" data-panel="highlights" style="display:none;">
       <div class="highlights-grid" id="highlights-grid">
         <!-- Populated by JS -->
+      </div>
+    </main>
+
+    <!-- Knowledge Graph tab -->
+    <main id="knowledge-graph-container" class="bookmarks-container content-panel" aria-label="Knowledge Graph" data-panel="knowledge-graph" style="display:none;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+        <button class="action-btn" id="kg-discover-btn" style="padding:8px 18px;font-size:13px;">🔍 Auto-Discover Connections</button>
+        <span id="kg-status" style="font-size:12px;color:var(--text-400);">Load items and connections to see your knowledge graph.</span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="flex:2;min-width:500px;min-height:500px;background:var(--bg-card);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:4px;position:relative;overflow:hidden;">
+          <svg id="kg-svg" width="100%" height="100%" style="min-height:500px;"></svg>
+        </div>
+        <div style="flex:1;min-width:240px;">
+          <div style="background:var(--bg-card);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:16px;margin-bottom:12px;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-200);">📊 Graph Stats</div>
+            <div id="kg-stats">
+              <div style="font-size:12px;color:var(--text-400);margin-bottom:4px;">Nodes: <strong id="kg-node-count" style="color:var(--text-100);">—</strong></div>
+              <div style="font-size:12px;color:var(--text-400);margin-bottom:4px;">Edges: <strong id="kg-edge-count" style="color:var(--text-100);">—</strong></div>
+              <div style="font-size:12px;color:var(--text-400);">Connected: <strong id="kg-connected-pct" style="color:var(--text-100);">—</strong></div>
+            </div>
+          </div>
+          <div id="kg-node-detail" style="background:var(--bg-card);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:16px;display:none;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-200);">🔗 Selected Node</div>
+            <div id="kg-node-title" style="font-size:14px;font-weight:600;color:var(--text-100);margin-bottom:4px;"></div>
+            <div id="kg-node-url" style="font-size:11px;color:var(--text-400);margin-bottom:8px;word-break:break-all;"></div>
+            <div id="kg-node-connections" style="font-size:12px;color:var(--text-300);"></div>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -2132,6 +2162,7 @@
 
     // Lazy loading flags
     let highlightsLoaded = false;
+    let kgLoaded = false;
 
     // ── Tab Switching ──
     D2.dashboardTabs.forEach(tab => {
@@ -2145,10 +2176,11 @@
         const targetPanel = document.querySelector(`[data-panel="${tab.dataset.tab}"]`);
         if (targetPanel) targetPanel.classList.add('active-panel');
 
-        // Lazy load notes/research/highlights data
+        // Lazy load notes/research/highlights/kg data
         if (tab.dataset.tab === 'notes') loadNotes();
         if (tab.dataset.tab === 'research') loadResearch();
         if (tab.dataset.tab === 'highlights') loadHighlights();
+        if (tab.dataset.tab === 'knowledge-graph') loadKnowledgeGraph();
       });
     });
 
@@ -2291,6 +2323,327 @@
         D2.highlightsGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Failed to load highlights</div><div class="empty-state-text">' + escapeHtml(err.message) + '</div></div>';
       }
     }
+
+    // ═════════════════════════════════════════════════
+    // KNOWLEDGE GRAPH
+    // ═════════════════════════════════════════════════
+
+    let kgData = null;
+    let kgSimulation = null;
+    let kgSvg = null;
+
+    async function loadKnowledgeGraph() {
+      if (kgLoaded) return;
+      kgLoaded = true;
+
+      const svg = document.getElementById('kg-svg');
+      const status = document.getElementById('kg-status');
+      status.textContent = 'Loading your knowledge graph...';
+
+      try {
+        const data = await apiCall('/knowledge-graph');
+        kgData = data;
+
+        document.getElementById('kg-node-count').textContent = data.nodes?.length || 0;
+        document.getElementById('kg-edge-count').textContent = data.edges?.length || 0;
+        const connected = (data.edges?.length || 0) > 0
+          ? Math.round((new Set(data.edges.flatMap(e => [e.source_item_id, e.target_item_id])).size / Math.max(data.nodes?.length || 1, 1)) * 100)
+          : 0;
+        document.getElementById('kg-connected-pct').textContent = connected + '%';
+
+        if (!data.nodes || data.nodes.length === 0) {
+          status.textContent = 'No items saved yet. Save some items to see your knowledge graph.';
+          svg.innerHTML = '';
+          return;
+        }
+
+        if (!data.edges || data.edges.length === 0) {
+          status.textContent = `${data.nodes.length} memories found. Click "Auto-Discover Connections" to find links between them.`;
+          renderIsolatedNodes(data.nodes);
+          return;
+        }
+
+        status.textContent = `Showing ${data.nodes.length} memories with ${data.edges.length} connections.`;
+        renderGraph(data.nodes, data.edges);
+      } catch (err) {
+        status.textContent = 'Failed to load graph: ' + err.message;
+      }
+    }
+
+    function renderIsolatedNodes(nodes) {
+      const svg = document.getElementById('kg-svg');
+      const w = svg.clientWidth || 700;
+      const h = svg.clientHeight || 500;
+      const cx = w / 2, cy = h / 2;
+      const radius = Math.min(w, h) * 0.3;
+
+      svg.innerHTML = `
+        <text x="${cx}" y="30" text-anchor="middle" fill="#6b6890" font-size="12">No connections yet — isolated memories</text>
+        ${nodes.slice(0, 30).map((n, i) => {
+          const angle = (2 * Math.PI * i) / Math.min(nodes.length, 30);
+          const x = cx + radius * Math.cos(angle);
+          const y = cy + radius * Math.sin(angle);
+          const size = Math.max(6, Math.min(20, (n.memory_score || 0) / 5 + 6));
+          return `<circle cx="${x}" cy="${y}" r="${size}" fill="#8b5cf6" opacity="0.7" stroke="#a78bfa" stroke-width="1"
+            data-id="${n.id}" style="cursor:pointer;"
+            onclick="showNodeDetails(${n.id})"/>
+            <text x="${x}" y="${y + size + 12}" text-anchor="middle" fill="#c4b5fd" font-size="9"
+              onclick="showNodeDetails(${n.id})" style="cursor:pointer;">${escapeHtml(n.title || '').slice(0, 20)}</text>`;
+        }).join('')}
+      `;
+    }
+
+    function renderGraph(nodes, edges) {
+      const svg = document.getElementById('kg-svg');
+      const w = svg.clientWidth || 700;
+      const h = svg.clientHeight || 500;
+
+      // Build node map
+      const nodeMap = {};
+      nodes.forEach(n => { nodeMap[n.id] = n; });
+
+      // Color by source type
+      const typeColors = {
+        youtube: '#ef4444', github: '#34d399', blog: '#8b5cf6',
+        docs: '#60a5fa', news: '#f59e0b', web: '#a78bfa'
+      };
+
+      const nodeRadius = (n) => Math.max(6, Math.min(25, (n.memory_score || 0) / 4 + 8));
+
+      // Create group for zoom/pan
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      svg.innerHTML = '';
+      svg.appendChild(g);
+
+      // Draw edges first
+      edges.forEach(e => {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('stroke', 'rgba(139,92,246,0.25)');
+        line.setAttribute('stroke-width', Math.max(1, (e.confidence || 0.5) * 3));
+        line.setAttribute('data-source', e.source_item_id);
+        line.setAttribute('data-target', e.target_item_id);
+        e._el = line;
+        g.appendChild(line);
+      });
+
+      // Draw nodes
+      nodes.forEach(n => {
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        group.setAttribute('data-id', n.id);
+        group.style.cursor = 'pointer';
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        const r = nodeRadius(n);
+        circle.setAttribute('r', r);
+        circle.setAttribute('fill', typeColors[n.source_type] || '#a78bfa');
+        circle.setAttribute('opacity', '0.85');
+        circle.setAttribute('stroke', '#c4b5fd');
+        circle.setAttribute('stroke-width', '1.5');
+        n._el = group;
+        n._circle = circle;
+        group.appendChild(circle);
+
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.textContent = (n.title || '').slice(0, 18);
+        label.setAttribute('fill', '#c4b5fd');
+        label.setAttribute('font-size', '9');
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('dy', r + 14);
+        n._label = label;
+        group.appendChild(label);
+
+        // Click handler
+        group.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showNodeDetails(n.id);
+          // Highlight
+          document.querySelectorAll('#kg-svg circle').forEach(c => c.setAttribute('stroke', '#c4b5fd'));
+          circle.setAttribute('stroke', '#f5f3ff');
+          circle.setAttribute('stroke-width', '3');
+        });
+
+        g.appendChild(group);
+      });
+
+      // Force simulation using simple iterative layout
+      const centerX = w / 2, centerY = h / 2;
+      const repulsion = 800, attraction = 0.005;
+
+      // Initialize positions on a circle
+      const radius = Math.min(w, h) * 0.35;
+      nodes.forEach((n, i) => {
+        const angle = (2 * Math.PI * i) / nodes.length;
+        n.x = centerX + radius * Math.cos(angle) + (Math.random() - 0.5) * 20;
+        n.y = centerY + radius * Math.sin(angle) + (Math.random() - 0.5) * 20;
+        n.vx = 0; n.vy = 0;
+      });
+
+      let iterations = 0;
+      const maxIterations = 120;
+      const damp = 0.85;
+      const edgeMap = {};
+      edges.forEach(e => {
+        const key = `${e.source_item_id}-${e.target_item_id}`;
+        edgeMap[key] = e;
+      });
+
+      function tick() {
+        iterations++;
+        // Forces
+        nodes.forEach(n => {
+          let fx = 0, fy = 0;
+
+          // Center gravity
+          fx += (centerX - n.x) * 0.01;
+          fy += (centerY - n.y) * 0.01;
+
+          // Repulsion from other nodes
+          nodes.forEach(other => {
+            if (n.id === other.id) return;
+            const dx = n.x - other.x;
+            const dy = n.y - other.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const force = repulsion / (dist * dist);
+            fx += (dx / dist) * force;
+            fy += (dy / dist) * force;
+          });
+        });
+
+        // Edge attraction
+        edges.forEach(e => {
+          const src = nodeMap[e.source_item_id];
+          const tgt = nodeMap[e.target_item_id];
+          if (!src || !tgt) return;
+          const dx = tgt.x - src.x;
+          const dy = tgt.y - src.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          // Multiple edges pull proportionally
+          const samePairEdges = edges.filter(ee =>
+            (ee.source_item_id === e.source_item_id && ee.target_item_id === e.target_item_id) ||
+            (ee.source_item_id === e.target_item_id && ee.target_item_id === e.source_item_id)
+          );
+          const multiplier = 1 + samePairEdges.length * 0.5;
+          const force = dist * attraction * multiplier;
+          src.vx += (dx / dist) * force;
+          src.vy += (dy / dist) * force;
+          tgt.vx -= (dx / dist) * force;
+          tgt.vy -= (dy / dist) * force;
+        });
+
+        // Apply velocity with damping
+        nodes.forEach(n => {
+          n.vx *= damp;
+          n.vy *= damp;
+          n.x += n.vx;
+          n.y += n.vy;
+
+          // Clamp to svg bounds
+          n.x = Math.max(30, Math.min(w - 30, n.x));
+          n.y = Math.max(30, Math.min(h - 30, n.y));
+        });
+
+        if (iterations < maxIterations) {
+          requestAnimationFrame(tick);
+        }
+        renderStep(nodeMap);
+      }
+
+      function renderStep(nodeMap) {
+        // Update edges
+        edges.forEach(e => {
+          const src = nodeMap[e.source_item_id];
+          const tgt = nodeMap[e.target_item_id];
+          if (src && tgt && e._el) {
+            e._el.setAttribute('x1', src.x);
+            e._el.setAttribute('y1', src.y);
+            e._el.setAttribute('x2', tgt.x);
+            e._el.setAttribute('y2', tgt.y);
+          }
+        });
+
+        // Update nodes
+        nodes.forEach(n => {
+          if (n._el) {
+            n._el.setAttribute('transform', `translate(${n.x}, ${n.y})`);
+          }
+        });
+
+        // Draw type legend
+        const legendG = document.getElementById('kg-legend') || (() => {
+          const lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+          lg.setAttribute('id', 'kg-legend');
+          g.appendChild(lg);
+          return lg;
+        })();
+        const legendItems = Object.entries(typeColors);
+        legendG.innerHTML = '';
+        legendItems.forEach(([type, color], i) => {
+          const y = h - legendItems.length * 18 + i * 18;
+          const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          dot.setAttribute('cx', 20); dot.setAttribute('cy', y); dot.setAttribute('r', 4); dot.setAttribute('fill', color);
+          legendG.appendChild(dot);
+          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          text.setAttribute('x', 30); text.setAttribute('y', y + 1); text.setAttribute('fill', '#6b6890');
+          text.setAttribute('font-size', '10'); text.textContent = type;
+          legendG.appendChild(text);
+        });
+      }
+
+      tick();
+    }
+
+    // Node detail panel
+    function showNodeDetails(nodeId) {
+      if (!kgData) return;
+      const node = kgData.nodes.find(n => n.id == nodeId);
+      if (!node) return;
+      const panel = document.getElementById('kg-node-detail');
+      panel.style.display = 'block';
+
+      document.getElementById('kg-node-title').textContent = node.title || 'Untitled';
+      document.getElementById('kg-node-url').textContent = node.url || '';
+      document.getElementById('kg-node-url').onclick = () => { if (node.url) window.open(node.url, '_blank'); };
+      document.getElementById('kg-node-url').style.cursor = node.url ? 'pointer' : 'default';
+
+      // Find connections
+      const conns = (kgData.edges || []).filter(e => e.source_item_id == nodeId || e.target_item_id == nodeId);
+      const relatedIds = new Set(conns.map(e => e.source_item_id == nodeId ? e.target_item_id : e.source_item_id));
+      const relatedItems = kgData.nodes.filter(n => relatedIds.has(n.id)).slice(0, 10);
+
+      if (relatedItems.length > 0) {
+        document.getElementById('kg-node-connections').innerHTML = relatedItems.map(r => {
+          const conn = conns.find(e => e.source_item_id == nodeId && e.target_item_id == r.id)
+            || conns.find(e => e.target_item_id == nodeId && e.source_item_id == r.id);
+          return `<div style="padding:4px 0;border-bottom:1px solid rgba(139,92,246,0.08);font-size:12px;">
+            <span style="color:var(--purple-400);font-weight:500;">${escapeHtml(r.title || '').slice(0, 35)}</span>
+            <span style="color:var(--text-400);margin-left:6px;">— ${conn ? escapeHtml(conn.relationship) : 'related'} (${Math.round((conn?.confidence || 0.5) * 100)}%)</span>
+          </div>`;
+        }).join('');
+      } else {
+        document.getElementById('kg-node-connections').textContent = 'No direct connections yet.';
+      }
+    }
+
+    // Auto-discover connections
+    document.getElementById('kg-discover-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('kg-discover-btn');
+      const status = document.getElementById('kg-status');
+      btn.disabled = true;
+      btn.textContent = '⏳ Discovering...';
+      status.textContent = 'Running AI connection discovery...';
+
+      try {
+        const result = await apiCall('/connections/discover?limit=20', { method: 'POST' });
+        status.textContent = result.message || `Found ${result.discovered} new connections.`;
+        kgLoaded = false; // Force reload
+        loadKnowledgeGraph();
+      } catch (err) {
+        status.textContent = 'Discovery failed: ' + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 Auto-Discover Connections';
+      }
+    });
 
     // ── Update stats to include notes + research + highlights counts ──
     async function loadStats() {

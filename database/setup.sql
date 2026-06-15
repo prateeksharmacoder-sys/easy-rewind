@@ -127,6 +127,61 @@ CREATE TABLE IF NOT EXISTS public.highlights (
 );
 
 -- ─────────────────────────────────────────────
+-- TABLE 9: items (v2.2 — AI memory layer)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.items (
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           TEXT        NOT NULL DEFAULT 'anonymous',
+  url               TEXT        NOT NULL,
+  title             TEXT        NOT NULL DEFAULT '',
+  content           TEXT        DEFAULT '',             -- full page text
+  summary           TEXT        DEFAULT '',             -- AI-generated summary
+  tags              TEXT        DEFAULT '',             -- comma-separated, AI-generated
+  embedding         BYTEA,                             -- vector embedding (stored as F32 blob)
+  source_type       TEXT        DEFAULT 'web',          -- youtube, github, blog, docs, news, web
+  memory_score      REAL        DEFAULT 0,              -- 0..1 engagement score (v2.2)
+  last_interacted_at TIMESTAMPTZ,                       -- (v2.2) last user interaction
+  interaction_count INTEGER     DEFAULT 0,              -- (v2.2) total interactions
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_items_user_id ON public.items (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_items_url     ON public.items (user_id, url);
+CREATE INDEX IF NOT EXISTS idx_items_source  ON public.items (user_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_items_score   ON public.items (user_id, memory_score DESC);
+
+-- ─────────────────────────────────────────────
+-- TABLE 10: memory_connections (v2.2 — Knowledge Graph)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.memory_connections (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         TEXT        NOT NULL DEFAULT 'anonymous',
+  source_item_id  BIGINT      NOT NULL REFERENCES public.items(id) ON DELETE CASCADE,
+  target_item_id  BIGINT      NOT NULL REFERENCES public.items(id) ON DELETE CASCADE,
+  relationship    TEXT        NOT NULL DEFAULT 'related',
+  confidence      REAL        DEFAULT 0.5,
+  source          TEXT        DEFAULT 'manual',  -- manual, auto
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT mc_pair_unique UNIQUE (source_item_id, target_item_id, relationship)
+);
+CREATE INDEX IF NOT EXISTS idx_mc_source ON public.memory_connections (source_item_id);
+CREATE INDEX IF NOT EXISTS idx_mc_target ON public.memory_connections (target_item_id);
+CREATE INDEX IF NOT EXISTS idx_mc_user   ON public.memory_connections (user_id);
+
+-- ─────────────────────────────────────────────
+-- TABLE 11: error_log (v2.2 — client error capture)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.error_log (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     TEXT        NOT NULL DEFAULT 'anonymous',
+  error       TEXT        NOT NULL,
+  url         TEXT,
+  context     TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_error_log_user ON public.error_log (user_id, created_at DESC);
+
+-- ─────────────────────────────────────────────
 -- INDEXES
 -- ─────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id    ON public.bookmarks (user_id, created_at DESC);
@@ -139,6 +194,14 @@ CREATE INDEX IF NOT EXISTS idx_search_log_user      ON public.search_log (user_i
 CREATE INDEX IF NOT EXISTS idx_cache_term           ON public.cache (lower(term));
 CREATE INDEX IF NOT EXISTS idx_highlights_user_id   ON public.highlights (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_highlights_url       ON public.highlights (user_id, url);
+CREATE INDEX IF NOT EXISTS idx_items_user_id        ON public.items (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_items_url            ON public.items (user_id, url);
+CREATE INDEX IF NOT EXISTS idx_items_source         ON public.items (user_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_items_score          ON public.items (user_id, memory_score DESC);
+CREATE INDEX IF NOT EXISTS idx_mc_source            ON public.memory_connections (source_item_id);
+CREATE INDEX IF NOT EXISTS idx_mc_target            ON public.memory_connections (target_item_id);
+CREATE INDEX IF NOT EXISTS idx_mc_user              ON public.memory_connections (user_id);
+CREATE INDEX IF NOT EXISTS idx_error_log_user       ON public.error_log (user_id, created_at DESC);
 
 -- ─────────────────────────────────────────────
 -- ROW LEVEL SECURITY

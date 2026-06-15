@@ -191,6 +191,24 @@ function getDb() {
     CREATE INDEX IF NOT EXISTS idx_items_updated_at  ON items (user_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_item_tags_tag     ON item_tags (tag);
 
+  CREATE TABLE IF NOT EXISTS memory_connections (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           TEXT    NOT NULL DEFAULT 'anonymous',
+    source_item_id    INTEGER NOT NULL,
+    target_item_id    INTEGER NOT NULL,
+    relationship      TEXT    NOT NULL DEFAULT 'related',
+    confidence        REAL    DEFAULT 0.5,
+    source            TEXT    DEFAULT 'auto',
+    created_at        TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
+    FOREIGN KEY (source_item_id) REFERENCES items(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_item_id) REFERENCES items(id) ON DELETE CASCADE,
+    UNIQUE(source_item_id, target_item_id, relationship)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_mem_conn_source ON memory_connections (source_item_id);
+  CREATE INDEX IF NOT EXISTS idx_mem_conn_target ON memory_connections (target_item_id);
+  CREATE INDEX IF NOT EXISTS idx_mem_conn_user   ON memory_connections (user_id);
+
   CREATE TABLE IF NOT EXISTS error_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       TEXT    NOT NULL DEFAULT 'anonymous',
@@ -217,6 +235,9 @@ function getDb() {
   if (!itemColumns.includes('memory_score')) db.exec("ALTER TABLE items ADD COLUMN memory_score REAL DEFAULT 0.0");
   if (!itemColumns.includes('last_interacted_at')) db.exec("ALTER TABLE items ADD COLUMN last_interacted_at TEXT");
   if (!itemColumns.includes('interaction_count')) db.exec("ALTER TABLE items ADD COLUMN interaction_count INTEGER DEFAULT 0");
+
+  // ─── Source Type migration (Phase 2 — Source Intelligence) ───
+  if (!itemColumns.includes('source_type')) db.exec("ALTER TABLE items ADD COLUMN source_type TEXT DEFAULT 'web'");
 
   // ─── Create Indexes ──────────────────────────
   db.exec(`
@@ -635,6 +656,33 @@ function storeItemTags(database, itemId, tags, userId) {
   // Update the tags field on the items table
   const tagString = tags.map(t => t.trim().toLowerCase()).filter(Boolean).join(',');
   database.prepare('UPDATE items SET tags = ? WHERE id = ?').run(tagString, itemId);
+}
+
+// ─────────────────────────────────────────────
+// SOURCE TYPE DETECTION
+// ─────────────────────────────────────────────
+
+/**
+ * Detect content source type from a URL.
+ */
+function detectSourceType(url) {
+  if (!url) return 'web';
+  const u = url.toLowerCase();
+  // Hostname-level detection
+  if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
+  if (u.includes('github.com')) return 'github';
+  if (u.includes('medium.com') || u.includes('substack.com') || u.includes('blog.')) return 'blog';
+  if (u.includes('news.') || u.includes('reuters.com') || u.includes('cnn.com') || u.includes('bbc.com') || u.includes('nytimes.com') || u.includes('theguardian.com')) return 'news';
+  // Path-segment detection for docs (e.g. react.dev/learn/, developer.mozilla.org/en-US/docs/)
+  const parsed = new URL(u);
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+  const isDocsDomain = u.includes('docs.') || u.includes('learn.') || u.includes('wiki.')
+    || parsed.hostname.endsWith('.dev') || parsed.hostname.endsWith('.io')
+    || parsed.hostname.includes('developer') || parsed.hostname.includes('dev.');
+  const hasDocsPath = pathSegments.some(s => ['docs', 'learn', 'tutorial', 'guide', 'manual', 'reference'].includes(s))
+    || pathSegments.some(s => s.startsWith('doc') && s.length < 10);
+  if (isDocsDomain || hasDocsPath) return 'docs';
+  return 'web';
 }
 
 // ─────────────────────────────────────────────
@@ -1960,11 +2008,14 @@ router.post('/items', async (req, res) => {
   const database = getDb();
 
   try {
+    // Auto-detect source type from URL
+    const sourceType = detectSourceType(cleanUrl);
+
     // Step 1: Insert the item
     const info = database.prepare(`
-      INSERT INTO items (user_id, url, title, content, created_at, updated_at)
-      VALUES (?, ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    `).run(user_id, cleanUrl, cleanTitle, cleanContent);
+      INSERT INTO items (user_id, url, title, content, source_type, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
+    `).run(user_id, cleanUrl, cleanTitle, cleanContent, sourceType);
     const itemId = info.lastInsertRowid;
 
     // Step 2: Generate summary (parallel with embedding)
@@ -2135,6 +2186,386 @@ router.patch('/items/:id/interact', (req, res) => {
 });
 
 // ═════════════════════════════════════════════
+// NEW: RELATED MEMORIES ENDPOINT
+// ═════════════════════════════════════════════
+
+// GET /api/items/:id/related — Find semantically related items via embedding cosine similarity
+router.get('/items/:id/related', (req, res) => {
+  const { id } = req.params;
+  const user_id = getUserId(req);
+  const limit = Math.min(parseInt(req.query.limit) || 5, 20);
+  const database = getDb();
+
+  try {
+    // Get the source item's embedding
+    const sourceEmbedding = database.prepare(`
+      SELECT ie.embedding FROM item_embeddings ie
+      JOIN items i ON i.id = ie.item_id
+      WHERE ie.item_id = ? AND i.user_id = ?
+    `).get(id, user_id);
+
+    if (!sourceEmbedding) {
+      // No embedding for source item — fall back to tag-based similarity
+      const sourceTags = database.prepare('SELECT tags FROM items WHERE id = ? AND user_id = ?').get(id, user_id);
+      if (!sourceTags) return res.status(404).json({ error: 'Item not found.' });
+
+      const tagList = (sourceTags.tags || '').split(',').filter(Boolean).map(t => t.trim());
+      if (tagList.length === 0) return res.json({ related: [], count: 0 });
+
+      // Find items sharing tags
+      const placeholders = tagList.map(() => 'LOWER(tags) LIKE ?').join(' OR ');
+      const params = tagList.flatMap(t => [`%${t.toLowerCase()}%`]);
+      const related = database.prepare(`
+        SELECT i.id, i.title, i.summary, i.url, i.tags, i.source_type, i.created_at,
+               i.memory_score
+        FROM items i
+        WHERE i.user_id = ? AND i.id != ?
+          AND (${placeholders})
+        ORDER BY i.memory_score DESC, i.created_at DESC
+        LIMIT ?
+      `).all(user_id, id, ...params, limit);
+
+      return res.json({ related: related || [], count: related?.length || 0, method: 'tag' });
+    }
+
+    // Parse source embedding
+    const sourceVec = parseEmbedding(sourceEmbedding.embedding);
+    if (!sourceVec) return res.json({ related: [], count: 0 });
+
+    // Get all other embeddings for this user
+    const allEmbeddings = database.prepare(`
+      SELECT ie.item_id, ie.embedding, i.title, i.summary, i.url, i.tags, i.source_type,
+             i.created_at, i.memory_score
+      FROM item_embeddings ie
+      JOIN items i ON i.id = ie.item_id
+      WHERE i.user_id = ? AND ie.item_id != ?
+    `).all(user_id, id);
+
+    // Score and sort
+    const scored = [];
+    for (const row of allEmbeddings) {
+      const vec = parseEmbedding(row.embedding);
+      if (!vec) continue;
+      const sim = cosineSimilarity(sourceVec, vec);
+      if (sim < 0.1) continue; // floor
+      scored.push({
+        id: row.item_id,
+        title: row.title || '',
+        summary: row.summary || '',
+        url: row.url || '',
+        tags: row.tags || '',
+        source_type: row.source_type || 'web',
+        similarity: Math.round(sim * 1000) / 1000,
+        memory_score: row.memory_score || 0,
+        created_at: row.created_at,
+      });
+    }
+
+    scored.sort((a, b) => b.similarity - a.similarity);
+    const related = scored.slice(0, limit);
+
+    return res.json({ related, count: related.length, method: 'embedding' });
+  } catch (err) {
+    console.error('[Related Items Error]', err.message);
+    return res.status(500).json({ error: 'Failed to find related items.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// NEW: KNOWLEDGE GRAPH ENDPOINTS
+// ═════════════════════════════════════════════
+
+// POST /api/items/:id/connect — Create a connection between two items
+router.post('/items/:id/connect', (req, res) => {
+  const sourceId = parseInt(req.params.id);
+  const { target_id, relationship, confidence } = req.body;
+  const user_id = getUserId(req);
+  const database = getDb();
+
+  if (!target_id) return res.status(400).json({ error: 'target_id is required.' });
+  if (sourceId === target_id) return res.status(400).json({ error: 'Cannot connect an item to itself.' });
+
+  try {
+    // Verify both items exist and belong to user
+    const source = database.prepare('SELECT id FROM items WHERE id = ? AND user_id = ?').get(sourceId, user_id);
+    const target = database.prepare('SELECT id FROM items WHERE id = ? AND user_id = ?').get(target_id, user_id);
+    if (!source) return res.status(404).json({ error: 'Source item not found.' });
+    if (!target) return res.status(404).json({ error: 'Target item not found.' });
+
+    const rel = sanitize(relationship || 'related', 50);
+    const conf = Math.max(0, Math.min(1, parseFloat(confidence) || 0.5));
+
+    database.prepare(`
+      INSERT OR REPLACE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
+      VALUES (?, ?, ?, ?, ?, 'manual')
+    `).run(user_id, sourceId, target_id, rel, conf);
+
+    // Also create reverse connection for bidirectional graph
+    database.prepare(`
+      INSERT OR IGNORE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
+      VALUES (?, ?, ?, ?, ?, 'manual')
+    `).run(user_id, target_id, sourceId, rel, conf);
+
+    const connection = database.prepare(`
+      SELECT * FROM memory_connections WHERE source_item_id = ? AND target_item_id = ? AND relationship = ?
+    `).get(sourceId, target_id, rel);
+
+    return res.json({ success: true, connection });
+  } catch (err) {
+    console.error('[Connect Error]', err.message);
+    return res.status(500).json({ error: 'Failed to create connection.' });
+  }
+});
+
+// GET /api/items/:id/connections — Get all connections for an item
+router.get('/items/:id/connections', (req, res) => {
+  const { id } = req.params;
+  const user_id = getUserId(req);
+  const database = getDb();
+
+  try {
+    // Get connections where this item is source or target
+    const outgoing = database.prepare(`
+      SELECT mc.*, i.title as target_title, i.url as target_url, i.summary as target_summary,
+             i.source_type as target_source_type, i.memory_score as target_memory_score
+      FROM memory_connections mc
+      JOIN items i ON i.id = mc.target_item_id
+      WHERE mc.source_item_id = ? AND mc.user_id = ?
+      ORDER BY mc.confidence DESC, mc.created_at DESC
+    `).all(id, user_id);
+
+    const incoming = database.prepare(`
+      SELECT mc.*, i.title as source_title, i.url as source_url, i.summary as source_summary,
+             i.source_type as source_source_type, i.memory_score as source_memory_score
+      FROM memory_connections mc
+      JOIN items i ON i.id = mc.source_item_id
+      WHERE mc.target_item_id = ? AND mc.user_id = ?
+      ORDER BY mc.confidence DESC, mc.created_at DESC
+    `).all(id, user_id);
+
+    // Merge and deduplicate by item id
+    const seen = new Set();
+    const allConnections = [];
+
+    for (const c of outgoing) {
+      const key = `out-${c.target_item_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      allConnections.push({
+        id: c.id,
+        connected_item_id: c.target_item_id,
+        title: c.target_title,
+        url: c.target_url,
+        summary: c.target_summary,
+        source_type: c.target_source_type,
+        memory_score: c.target_memory_score,
+        relationship: c.relationship,
+        confidence: c.confidence,
+        direction: 'outgoing',
+        source: c.source,
+        created_at: c.created_at,
+      });
+    }
+
+    for (const c of incoming) {
+      const key = `in-${c.source_item_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      allConnections.push({
+        id: c.id,
+        connected_item_id: c.source_item_id,
+        title: c.source_title,
+        url: c.source_url,
+        summary: c.source_summary,
+        source_type: c.source_source_type,
+        memory_score: c.source_memory_score,
+        relationship: c.relationship,
+        confidence: c.confidence,
+        direction: 'incoming',
+        source: c.source,
+        created_at: c.created_at,
+      });
+    }
+
+    return res.json({ connections: allConnections, count: allConnections.length });
+  } catch (err) {
+    console.error('[Get Connections Error]', err.message);
+    return res.status(500).json({ error: 'Failed to get connections.' });
+  }
+});
+
+// POST /api/connections/discover — Auto-discover connections between items using AI
+router.post('/connections/discover', async (req, res) => {
+  const user_id = getUserId(req);
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  const database = getDb();
+
+  try {
+    // Get unconnected items (items that have fewer than 2 existing connections)
+    const unconnectedItems = database.prepare(`
+      SELECT * FROM (
+        SELECT i.id, i.title, i.summary, i.content, i.url, i.tags, i.source_type, i.memory_score, i.created_at,
+               (SELECT COUNT(DISTINCT CASE WHEN mc.source_item_id = i.id THEN mc.target_item_id ELSE mc.source_item_id END)
+                FROM memory_connections mc
+                WHERE mc.source_item_id = i.id OR mc.target_item_id = i.id) as conn_count
+        FROM items i
+        WHERE i.user_id = ?
+      ) sub
+      WHERE conn_count < 2
+      ORDER BY sub.memory_score DESC, sub.created_at DESC
+      LIMIT ?
+    `).all(user_id, limit);
+
+    if (unconnectedItems.length < 2) {
+      return res.json({ discovered: 0, message: 'Not enough unconnected items to discover connections.' });
+    }
+
+    // Build candidate pairs (try to connect items with shared tags first)
+    const pairs = [];
+    const seenPairs = new Set();
+
+    for (let i = 0; i < unconnectedItems.length; i++) {
+      const a = unconnectedItems[i];
+      const aTags = (a.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+
+      for (let j = i + 1; j < unconnectedItems.length; j++) {
+        const b = unconnectedItems[j];
+        const pairKey = `${Math.min(a.id, b.id)}-${Math.max(a.id, b.id)}`;
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+
+        // Skip if connection already exists
+        const existing = database.prepare(`
+          SELECT id FROM memory_connections
+          WHERE ((source_item_id = ? AND target_item_id = ?) OR (source_item_id = ? AND target_item_id = ?))
+            AND user_id = ?
+        `).get(a.id, b.id, b.id, a.id, user_id);
+        if (existing) continue;
+
+        // Score pair by tag overlap and memory score
+        const bTags = (b.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        const sharedTags = aTags.filter(t => bTags.includes(t)).length;
+        const tagScore = sharedTags / Math.max(aTags.length, bTags.length);
+        const memoryScore = ((a.memory_score || 0) + (b.memory_score || 0)) / 200; // combined, 0..1
+        const combinedScore = (tagScore * 0.6) + (memoryScore * 0.4);
+
+        if (combinedScore > 0.1 || sharedTags > 0) {
+          pairs.push({ a, b, score: combinedScore, sharedTags });
+        }
+      }
+    }
+
+    // Sort by connection score and take top pairs
+    pairs.sort((x, y) => y.score - x.score);
+    const topPairs = pairs.slice(0, 20);
+
+    // Use LLM to label relationships for the top pairs
+    let discovered = 0;
+    const ai = getGenAI();
+
+    for (const pair of topPairs) {
+      let relationship = 'related';
+      let confidence = pair.score;
+
+      if (ai && pair.score > 0.15) {
+        try {
+          const prompt = `You are a knowledge graph curator. Given two saved items from a user's knowledge base, determine the relationship between them.
+
+Item A: "${pair.a.title || 'Untitled'}"
+Summary A: "${(pair.a.summary || pair.a.content || '').slice(0, 300)}"
+Tags A: ${pair.a.tags || 'none'}
+
+Item B: "${pair.b.title || 'Untitled'}"
+Summary B: "${(pair.b.summary || pair.b.content || '').slice(0, 300)}"
+Tags B: ${pair.b.tags || 'none'}
+
+Choose ONE relationship from: "related", "prerequisite", "extension", "contrast", "application", "part_of", "example", "reference"
+Respond with just the relationship word, nothing else.`;
+
+          const result = await callGemini(prompt);
+          const validRelationships = ['related', 'prerequisite', 'extension', 'contrast', 'application', 'part_of', 'example', 'reference'];
+          if (validRelationships.includes(result?.trim().toLowerCase())) {
+            relationship = result.trim().toLowerCase();
+          }
+        } catch (_) {}
+      }
+
+      // Create bidirectional connections
+      try {
+        database.prepare(`
+          INSERT OR IGNORE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
+          VALUES (?, ?, ?, ?, ?, 'auto')
+        `).run(user_id, pair.a.id, pair.b.id, relationship, Math.round(confidence * 100) / 100);
+
+        database.prepare(`
+          INSERT OR IGNORE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
+          VALUES (?, ?, ?, ?, ?, 'auto')
+        `).run(user_id, pair.b.id, pair.a.id, relationship, Math.round(confidence * 100) / 100);
+
+        discovered++;
+      } catch (_) {}
+    }
+
+    return res.json({
+      discovered,
+      candidates_considered: pairs.length,
+      message: `Discovered ${discovered} new connections between your memories.`,
+    });
+  } catch (err) {
+    console.error('[Discover Connections Error]', err.message);
+    return res.status(500).json({ error: 'Failed to discover connections.' });
+  }
+});
+
+// DELETE /api/connections/:id — Remove a connection
+router.delete('/connections/:id', (req, res) => {
+  const { id } = req.params;
+  const user_id = getUserId(req);
+  const database = getDb();
+
+  try {
+    database.prepare('DELETE FROM memory_connections WHERE id = ? AND user_id = ?').run(id, user_id);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to delete connection.' });
+  }
+});
+
+// GET /api/knowledge-graph — Full graph data for dashboard visualization
+router.get('/knowledge-graph', (req, res) => {
+  const user_id = getUserId(req);
+  const database = getDb();
+
+  try {
+    // Get all items as nodes
+    const nodes = database.prepare(`
+      SELECT id, title, url, tags, source_type, memory_score, interaction_count, created_at
+      FROM items WHERE user_id = ?
+      ORDER BY memory_score DESC
+    `).all(user_id);
+
+    // Get all connections as edges
+    const edges = database.prepare(`
+      SELECT id, source_item_id, target_item_id, relationship, confidence, source
+      FROM memory_connections WHERE user_id = ?
+      ORDER BY confidence DESC
+    `).all(user_id);
+
+    return res.json({
+      nodes: nodes || [],
+      edges: edges || [],
+      stats: {
+        node_count: nodes?.length || 0,
+        edge_count: edges?.length || 0,
+      },
+    });
+  } catch (err) {
+    console.error('[Knowledge Graph Error]', err.message);
+    return res.status(500).json({ error: 'Failed to load knowledge graph.' });
+  }
+});
+
+// ═════════════════════════════════════════════
 // NEW: VECTOR SEARCH ENDPOINT
 // ═════════════════════════════════════════════
 
@@ -2177,11 +2608,17 @@ router.get('/items/search', async (req, res) => {
     if (queryEmbedding && Array.isArray(queryEmbedding)) {
       const embeddings = database.prepare(`
         SELECT ie.item_id, ie.embedding, i.title, i.summary, i.content, i.tags, i.url,
-               i.created_at, i.memory_score, i.interaction_count, i.last_interacted_at
+               i.source_type, i.created_at, i.memory_score, i.interaction_count, i.last_interacted_at
         FROM item_embeddings ie
         JOIN items i ON i.id = ie.item_id
         WHERE i.user_id = ?
       `).all(user_id);
+
+      // Source type boost factors
+      const sourceTypeBoost = (type) => {
+        const boosts = { youtube: 1.0, github: 1.05, blog: 1.10, docs: 1.08, news: 0.95, web: 1.0 };
+        return boosts[type] || 1.0;
+      };
 
       const scored = [];
       for (const row of embeddings) {
@@ -2195,9 +2632,11 @@ router.get('/items/search', async (req, res) => {
         const recency = daysToRecency(ageMs / (24 * 60 * 60 * 1000));
         const memScore = normalizeScore(row.memory_score);
         const frequency = normalizeFreq(row.interaction_count);
+        const srcBoost = sourceTypeBoost(row.source_type);
 
         // 40% semantic + 30% recency + 20% memory_score + 10% frequency
-        const hybridScore = (0.40 * sim) + (0.30 * recency) + (0.20 * memScore) + (0.10 * frequency);
+        // Multiplied by source type boost (caps at 1.10)
+        const hybridScore = ((0.40 * sim) + (0.30 * recency) + (0.20 * memScore) + (0.10 * frequency)) * srcBoost;
 
         scored.push({
           id: row.item_id,
@@ -2206,6 +2645,7 @@ router.get('/items/search', async (req, res) => {
           content: row.content ? row.content.slice(0, 300) : '',
           tags: row.tags || '',
           url: row.url || '',
+          source_type: row.source_type || 'web',
           similarity: Math.round(sim * 1000) / 1000,
           recency: Math.round(recency * 1000) / 1000,
           memory_score: row.memory_score || 0,
@@ -2223,7 +2663,7 @@ router.get('/items/search', async (req, res) => {
     if (results.length < 3) {
       const pattern = `%${cleanQuery}%`;
       const keywordResults = database.prepare(`
-        SELECT id, title, summary, content, tags, url, created_at,
+        SELECT id, title, summary, content, tags, url, source_type, created_at,
                memory_score, interaction_count, last_interacted_at,
                CASE
                  WHEN LOWER(title) LIKE LOWER(?) THEN 1.0
@@ -2251,11 +2691,12 @@ router.get('/items/search', async (req, res) => {
         const recency = daysToRecency(ageMs / (24 * 60 * 60 * 1000));
         const memScore = normalizeScore(r.memory_score);
         const freq = normalizeFreq(r.interaction_count);
+        const srcBoost = sourceTypeBoost(r.source_type);
 
-        const hybridScore = (0.40 * (r.kw_score || 0.3))
+        const hybridScore = ((0.40 * (r.kw_score || 0.3))
                           + (0.30 * recency)
                           + (0.20 * memScore)
-                          + (0.10 * freq);
+                          + (0.10 * freq)) * srcBoost;
 
         results.push({
           id: r.id,
@@ -2264,6 +2705,7 @@ router.get('/items/search', async (req, res) => {
           content: r.content ? r.content.slice(0, 300) : '',
           tags: r.tags || '',
           url: r.url || '',
+          source_type: r.source_type || 'web',
           similarity: 0,
           recency: Math.round(recency * 1000) / 1000,
           memory_score: r.memory_score || 0,

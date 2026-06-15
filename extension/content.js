@@ -29,6 +29,7 @@ const EngagementTracker = (() => {
     scrollTimer: null,
     isScrolling: false,
     scrollStartTime: 0,
+    sourceType: null,           // detected on init
   };
 
   const SETTINGS_KEY = 'easy_rewind_auto_capture';
@@ -42,6 +43,72 @@ const EngagementTracker = (() => {
     minScrollPct: 80,           // minimum scroll depth percentage
     promptOnThreshold: true,    // show notification when threshold is crossed
   };
+
+  // ── Source type detection ──
+  function detectSourceType() {
+    const url = window.location.href.toLowerCase();
+
+    // Explicit URL-based detection
+    if (url.includes('youtube.com') || url.includes('youtu.be')) return 'youtube';
+    if (url.includes('github.com')) return 'github';
+
+    // Content-based detection
+    const hasVideo = document.querySelector('video, [data-youtube-video]');
+    if (hasVideo && (url.includes('watch') || url.includes('/video/') || url.includes('/tv/'))) return 'youtube';
+
+    // Check for article/blog markers
+    const hasArticle = document.querySelector('article');
+    const hasBlogMeta = document.querySelector('[property="article:published_time"], meta[name="blog"]');
+    const hasAuthor = document.querySelector('[rel="author"], .author, .byline');
+    const hasPostClass = document.querySelector('[class*="post"], [class*="article"], [id*="post-"]');
+    if (hasArticle || hasBlogMeta || (hasAuthor && hasPostClass)) return 'blog';
+
+    // Documentation markers
+    const hasDocsMeta = document.querySelector('[class*="doc"], [class*="tutorial"], [class*="guide"], [id*="doc-"]');
+    const hasCodeBlock = document.querySelector('pre code, pre.chroma');
+    const urlHasDocs = url.includes('docs.') || url.includes('learn.') || url.includes('wiki.');
+    if (urlHasDocs || (hasDocsMeta && hasCodeBlock)) return 'docs';
+
+    // News markers
+    const hasNewsMeta = document.querySelector('[property="article:section"], meta[name="news_keywords"]');
+    const urlIsNews = url.includes('news.') || url.includes('/news/');
+    if (urlIsNews || hasNewsMeta) return 'news';
+
+    // GitHub (content-based fallback)
+    const hasRepoMeta = document.querySelector('[class*="repository"], [class*="repo"]');
+    if (hasRepoMeta && window.location.hostname === 'github.com') return 'github';
+
+    return 'web';
+  }
+
+  // ── Get adaptive engagement weights based on content type ──
+  function getEngagementWeights() {
+    const type = state.sourceType || 'web';
+    const weights = {
+      //           time  scroll  click  select  key  visible
+      youtube: [0.50, 0.10, 0.10, 0.05, 0.05, 0.20],  // watch time dominant
+      github:  [0.40, 0.15, 0.10, 0.10, 0.10, 0.15],  // time + selections
+      blog:    [0.30, 0.35, 0.10, 0.10, 0.05, 0.10],  // scroll depth matters most
+      docs:    [0.25, 0.30, 0.10, 0.20, 0.05, 0.10],  // selections + scroll
+      news:    [0.35, 0.30, 0.10, 0.05, 0.05, 0.15],  // scroll + time
+      web:     [0.35, 0.30, 0.10, 0.10, 0.05, 0.10],  // balanced default
+    };
+    return weights[type] || weights.web;
+  }
+
+  // ── Get adaptive thresholds based on content type ──
+  function getAdaptiveThresholds() {
+    const type = state.sourceType || 'web';
+    const thresholds = {
+      youtube: { minMinutes: 3, minScrollPct: 50, scoreThreshold: 60 },   // shorter watch, less scrolling
+      github:  { minMinutes: 4, minScrollPct: 60, scoreThreshold: 60 },   // browsing repos
+      blog:    { minMinutes: 5, minScrollPct: 80, scoreThreshold: 65 },   // full read
+      docs:    { minMinutes: 4, minScrollPct: 70, scoreThreshold: 60 },   // reference reading
+      news:    { minMinutes: 3, minScrollPct: 60, scoreThreshold: 55 },   // quick scan
+      web:     { minMinutes: 5, minScrollPct: 80, scoreThreshold: 65 },   // default
+    };
+    return thresholds[type] || thresholds.web;
+  }
 
   // ── Scroll tracking ──
   function onScroll() {
@@ -124,27 +191,31 @@ const EngagementTracker = (() => {
     }
   }
 
-  // ── Compute current engagement score (0-100) ──
+  // ── Compute current engagement score (0-100) with adaptive weights ──
   function getEngagementScore() {
     const now = Date.now();
     const elapsedMs = now - state.startTime;
     const elapsedMin = elapsedMs / 60000;
+
+    // Get adaptive thresholds for this content type
+    const adaptive = getAdaptiveThresholds();
+    const weights = getEngagementWeights();
 
     // Visible time ratio (how much of elapsed time was page visible)
     const visibleRatio = elapsedMin > 0
       ? Math.min(1, (state.visibleTime + (state.isVisible ? (now - state.lastVisibleCheck) : 0)) / elapsedMs)
       : 0;
 
-    // Scores for each dimension (0-1)
-    const timeScore    = Math.min(1, elapsedMin / settings.minMinutes);
-    const scrollScore  = Math.min(1, state.maxScrollDepth / settings.minScrollPct);
+    // Scores for each dimension (0-1) — uses adaptive minMinutes/minScrollPct
+    const timeScore    = Math.min(1, elapsedMin / (adaptive.minMinutes || settings.minMinutes));
+    const scrollScore  = Math.min(1, state.maxScrollDepth / (adaptive.minScrollPct || settings.minScrollPct));
     const clickScore   = Math.min(1, state.clicks / 5);
     const selectScore  = Math.min(1, state.selections / 3);
     const keyScore     = Math.min(1, state.keypresses / 20);
 
-    // Weighted composite: time + scroll are primary signals
-    const composite = (0.35 * timeScore) + (0.30 * scrollScore) + (0.10 * clickScore)
-                    + (0.10 * selectScore) + (0.05 * keyScore) + (0.10 * visibleRatio);
+    // Adaptive weighted composite
+    const composite = (weights[0] * timeScore) + (weights[1] * scrollScore) + (weights[2] * clickScore)
+                    + (weights[3] * selectScore) + (weights[4] * keyScore) + (weights[5] * visibleRatio);
 
     return {
       score: Math.round(composite * 100),
@@ -153,6 +224,7 @@ const EngagementTracker = (() => {
       clicks: state.clicks,
       selections: state.selections,
       visible_ratio: Math.round(visibleRatio * 100),
+      source_type: state.sourceType || 'web',
     };
   }
 
@@ -190,6 +262,9 @@ const EngagementTracker = (() => {
 
   // ── Public init ──
   function init() {
+    // Detect source type once on page load
+    state.sourceType = detectSourceType();
+
     loadSettings();
     if (!settings.enabled) return;
 
@@ -210,11 +285,11 @@ const EngagementTracker = (() => {
 
     startHeartbeat();
 
-    // Initial flush after 30s so background gets first heartbeat
-    // (the regular heartbeat interval handles this)
+    // Log detected type for debugging
+    console.log(`[easy-rewind] Tracking ${state.sourceType} page:`, window.location.hostname);
   }
 
-  return { init, getEngagementScore, flushEngagement, settings };
+  return { init, getEngagementScore, flushEngagement, detectSourceType, settings };
 })();
 
 // ═══════════════════════════════════════════════
@@ -232,6 +307,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       textContent: getPageText(),
       keywords: getPageKeywords(),
       engagement: EngagementTracker.getEngagementScore(),
+      source_type: EngagementTracker.detectSourceType(),
     });
     return true;
   }

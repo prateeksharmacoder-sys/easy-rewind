@@ -1295,7 +1295,7 @@ async function searchSavedContent(term) {
     // Show vector search results first (items)
     if (items.length > 0) {
       html += items.slice(0, 5).map(item => `
-        <div class="list-item" data-url="${escapeHtml(item.url)}" style="cursor:pointer;">
+        <div class="list-item" data-url="${escapeHtml(item.url)}" data-item-id="${item.id}" style="cursor:pointer;">
           <div class="list-item-topic">🧬 ${escapeHtml(item.title || 'Untitled')}</div>
           <div class="list-item-title">${escapeHtml(truncate(item.summary || item.content || '', 80))}</div>
           ${item.tags ? `<div class="list-item-tags" style="font-size:9px;color:var(--text-muted);margin-top:2px;">🏷 ${escapeHtml(item.tags)}</div>` : ''}
@@ -1339,9 +1339,73 @@ async function searchSavedContent(term) {
         if (url) chrome.tabs.create({ url });
       });
     });
+
+    // Wire up related-memories loading for items with data-item-id
+    els.searchSavedList.querySelectorAll('.list-item[data-item-id]').forEach(item => {
+      item.addEventListener('click', (e) => {
+        const itemId = item.dataset.itemId;
+        const itemUrl = item.dataset.url;
+        // Don't navigate away — show related items instead
+        e.preventDefault();
+        e.stopPropagation();
+        // Load related items and show
+        loadRelatedItemsForItem(itemId, itemUrl);
+      });
+    });
   } catch (err) {
     // Silent fail — this is a secondary feature
     console.warn('[Saved Search]', err.message);
+  }
+}
+
+// ═════════════════════════════════════════════
+// RELATED MEMORIES
+// ═════════════════════════════════════════════
+
+/**
+ * Load related items for a given item ID and display them below search results.
+ */
+async function loadRelatedItemsForItem(itemId, itemUrl) {
+  if (!itemId) return;
+  const listEl = document.getElementById('search-related-list');
+  const container = document.getElementById('search-related-results');
+  if (!listEl || !container) return;
+
+  container.style.display = 'block';
+  listEl.innerHTML = '<div style="text-align:center;padding:8px;font-size:11px;color:var(--text-muted);">🔍 Finding related memories...</div>';
+
+  try {
+    const data = await apiCall(`/items/${itemId}/related`);
+    const related = data.related || [];
+
+    if (related.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+
+    listEl.innerHTML = related.slice(0, 5).map(r => `
+      <div class="list-item" data-url="${escapeHtml(r.url || '')}" style="cursor:pointer;padding:6px 8px;">
+        <div class="list-item-title" style="font-size:11px;">${escapeHtml(r.title || 'Related memory')}</div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">
+          ${r.summary ? escapeHtml(truncate(r.summary, 60)) : ''}
+          ${r.tags ? ' · 🏷 ' + escapeHtml(r.tags) : ''}
+        </div>
+        <div class="list-item-meta" style="margin-top:2px;">
+          <span class="list-item-date">🔗 ${Math.round((r.similarity || 0) * 100)}% match · ${r.source_type || 'web'}</span>
+        </div>
+      </div>
+    `).join('');
+
+    // Wire up click-to-open
+    listEl.querySelectorAll('.list-item[data-url]').forEach(item => {
+      item.addEventListener('click', () => {
+        const url = item.dataset.url;
+        if (url) chrome.tabs.create({ url });
+      });
+    });
+  } catch (err) {
+    console.warn('[Related Items]', err.message);
+    container.style.display = 'none';
   }
 }
 
