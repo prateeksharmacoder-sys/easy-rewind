@@ -1,0 +1,168 @@
+/**
+ * easy-rewind Learning Assistant - Express Backend Server
+ *
+ * This is the main entry point for the backend API.
+ * It handles CORS, rate limiting, middleware setup, and route registration.
+ */
+
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const path = require('path');
+const axios = require('axios');
+const apiRoutes = require('./routes/api');
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// ─────────────────────────────────────────────
+// CORS Configuration
+// Allows requests from Chrome extensions and local dashboard
+// ─────────────────────────────────────────────
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, curl)
+    if (!origin) return callback(null, true);
+
+    // Allow Chrome extensions (any extension ID)
+    if (origin.startsWith('chrome-extension://')) return callback(null, true);
+
+    // Allow local development origins
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5000',
+      'http://127.0.0.1:5000',
+      'http://127.0.0.1:3000',
+    ];
+
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // Block all other origins
+    callback(new Error(`CORS policy: Origin ${origin} not allowed`));
+  },
+  methods: ['GET', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id'],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+
+// ─────────────────────────────────────────────
+// Rate Limiting
+// Prevents abuse of the AI lookup endpoint
+// ─────────────────────────────────────────────
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,                   // max 200 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please wait a few minutes and try again.' },
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minute
+  max: 10,              // max 10 AI lookups per minute (cached responses bypass this)
+  message: { error: 'Too many AI lookups. Please wait a moment.' },
+});
+
+app.use(generalLimiter);
+
+// ─────────────────────────────────────────────
+// Body Parsing Middleware
+// ─────────────────────────────────────────────
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// ─────────────────────────────────────────────
+// Request Logging (development only)
+// ─────────────────────────────────────────────
+if (process.env.NODE_ENV === 'development') {
+  app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${req.method} ${req.path}`);
+    next();
+  });
+}
+
+// ─────────────────────────────────────────────
+// Serve Dashboard Website
+// The dashboard.html is served from the frontend folder
+// ─────────────────────────────────────────────
+app.use(express.static(path.join(__dirname, '..', 'frontend')));
+
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'frontend', 'dashboard.html'));
+});
+
+// Root redirect to dashboard
+app.get('/', (req, res) => {
+  res.redirect('/dashboard');
+});
+
+// ─────────────────────────────────────────────
+// API Routes
+// Apply AI-specific rate limiter only to the quick-lookup route
+// ─────────────────────────────────────────────
+app.use('/api/quick-lookup', aiLimiter);
+app.use('/api', apiRoutes);
+
+// ─────────────────────────────────────────────
+// Global Error Handler
+// Catches any unhandled errors and returns clean JSON responses
+// ─────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('[Server Error]', err.message);
+
+  // CORS errors
+  if (err.message && err.message.startsWith('CORS policy')) {
+    return res.status(403).json({ error: 'Request blocked by CORS policy.' });
+  }
+
+  res.status(500).json({
+    error: 'Internal server error. Please try again.',
+    ...(process.env.NODE_ENV === 'development' && { details: err.message }),
+  });
+});
+
+// ─────────────────────────────────────────────
+// 404 Handler for unmatched routes
+// ─────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ error: `Route ${req.method} ${req.path} not found.` });
+});
+
+// ─────────────────────────────────────────────
+// Start Server
+// ─────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log('');
+  console.log('╔══════════════════════════════════════════╗');
+  console.log('║     easy-rewind Learning Assistant       ║');
+  console.log('║        Backend Server Running             ║');
+  console.log('╠══════════════════════════════════════════╣');
+  console.log(`║  API:       http://localhost:${PORT}/api     ║`);
+  console.log(`║  Dashboard: http://localhost:${PORT}/dashboard ║`);
+  console.log(`║  Health:    http://localhost:${PORT}/api/health ║`);
+  console.log('╚══════════════════════════════════════════╝');
+  console.log('');
+
+  // Warn if Gemini API key is not set
+  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
+    console.warn('WARNING: Gemini API key not configured in .env');
+    console.warn('   AI quick-lookup will use mock responses until configured.\n');
+  }
+
+  // Auto-check reminders every 2 minutes (built-in, no extension needed)
+  setInterval(async () => {
+    try {
+      await axios.post(`http://localhost:${PORT}/api/check-reminders`, {}, {
+        headers: { 'Content-Type': 'application/json', 'x-user-id': 'system' },
+      });
+    } catch (_) { /* silent — server self-check is best-effort */ }
+  }, 2 * 60 * 1000);
+  console.log('[Reminders] Auto-check every 2 minutes enabled\n');
+});
+
+module.exports = app;

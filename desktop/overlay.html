@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>easy-rewind Overlay</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-primary: #0f0f1a;
+      --bg-secondary: #161627;
+      --bg-card: #1e1e35;
+      --bg-input: #252540;
+      --bg-hover: #2a2a4a;
+      --accent-purple: #7c3aed;
+      --accent-violet: #8b5cf6;
+      --accent-green: #34d399;
+      --text-primary: #f1f0ff;
+      --text-secondary: #a9a5c8;
+      --text-muted: #6b6890;
+      --border: rgba(139, 92, 246, 0.2);
+      --border-focus: rgba(139, 92, 246, 0.6);
+      --glow: 0 0 20px rgba(124, 58, 237, 0.3);
+      --radius-sm: 8px;
+      --radius-md: 12px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      height: 100vh;
+      overflow: hidden;
+      border: 1px solid var(--accent-violet);
+      border-radius: 16px;
+      -webkit-app-region: drag;
+    }
+
+    .container {
+      padding: 16px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      -webkit-app-region: no-drag;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #7c3aed, #6366f1);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    .header-title { font-size: 14px; font-weight: 700; }
+    .header-subtitle { font-size: 10px; color: var(--text-muted); }
+
+    .close-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-input);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .close-btn:hover { background: var(--bg-hover); color: #ef4444; }
+
+    /* Search Input */
+    .search-section { margin-bottom: 12px; }
+    .search-row {
+      display: flex;
+      gap: 8px;
+    }
+    .search-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .search-input:focus {
+      border-color: var(--border-focus);
+      box-shadow: var(--glow);
+    }
+    .search-input::placeholder { color: var(--text-muted); }
+
+    .search-btn {
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #7c3aed, #6366f1);
+      border: none;
+      border-radius: var(--radius-sm);
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+    .search-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    /* Mode Tabs */
+    .mode-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    .mode-tab {
+      flex: 1;
+      padding: 8px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+      background: var(--bg-card);
+      color: var(--text-muted);
+    }
+    .mode-tab:hover { border-color: var(--border); color: var(--text-secondary); }
+    .mode-tab.active {
+      border-color: var(--accent-violet);
+      background: rgba(124, 58, 237, 0.15);
+      color: var(--accent-violet);
+    }
+
+    /* Content panels */
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* Definition result */
+    .result-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      margin-top: 8px;
+      display: none;
+    }
+    .result-box.visible { display: block; }
+    .result-term { font-size: 11px; font-weight: 700; color: var(--accent-violet); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .result-def { font-size: 13px; line-height: 1.6; }
+
+    /* Quick Note */
+    .note-input {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      resize: none;
+      min-height: 80px;
+      transition: all 0.2s;
+    }
+    .note-input:focus { border-color: var(--border-focus); box-shadow: var(--glow); }
+
+    .btn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #6366f1);
+      color: white;
+      width: 100%;
+      margin-top: 8px;
+    }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    /* Recent items */
+    .recent-section { margin-top: 10px; flex: 1; overflow-y: auto; }
+    .recent-title { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .recent-list { display: flex; flex-direction: column; gap: 4px; }
+    .recent-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 11px;
+    }
+    .recent-item:hover { border-color: var(--border-focus); }
+    .recent-item-content { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .recent-item-meta { font-size: 9px; color: var(--text-muted); margin-top: 2px; }
+
+    /* Status */
+    .status { font-size: 11px; color: var(--text-muted); margin-top: 8px; text-align: center; display: none; }
+    .status.visible { display: block; }
+    .status.success { color: var(--accent-green); }
+    .status.error { color: #f87171; }
+
+    .spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .footer-note {
+      margin-top: auto;
+      font-size: 9px;
+      color: var(--text-muted);
+      text-align: center;
+      padding-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <div class="logo">⏪</div>
+        <div>
+          <div class="header-title">easy-rewind</div>
+          <div class="header-subtitle">Press Esc to close</div>
+        </div>
+      </div>
+      <button class="close-btn" id="close-btn">✕</button>
+    </div>
+
+    <!-- Search (always visible) -->
+    <div class="search-section">
+      <div class="search-row">
+        <input type="text" class="search-input" id="search-input"
+          placeholder="Search term or ask anything..." autofocus spellcheck="false" />
+        <button class="search-btn" id="search-btn">🔍</button>
+      </div>
+      <div class="result-box" id="result-box">
+        <div class="result-term" id="result-term"></div>
+        <div class="result-def" id="result-def"></div>
+      </div>
+    </div>
+
+    <!-- Mode tabs -->
+    <div class="mode-tabs">
+      <div class="mode-tab active" data-mode="search">🔍 Search</div>
+      <div class="mode-tab" data-mode="note">📝 Quick Note</div>
+      <div class="mode-tab" data-mode="recent">📚 Recent</div>
+    </div>
+
+    <!-- Panel: Search results shown above -->
+
+    <!-- Panel: Quick Note -->
+    <div class="panel" id="panel-note">
+      <textarea class="note-input" id="note-input"
+        placeholder="What's on your mind? I'll save it and remind you..."></textarea>
+      <button class="btn btn-primary" id="save-note-btn">💾 Save Thought</button>
+      <div class="status" id="note-status"></div>
+    </div>
+
+    <!-- Panel: Recent -->
+    <div class="panel" id="panel-recent">
+      <div class="recent-section">
+        <div class="recent-title">Recent Bookmarks & Notes</div>
+        <div class="recent-list" id="recent-list">
+          <div style="text-align:center;padding:16px;color:var(--text-muted);font-size:11px;">
+            Loading...
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status" id="global-status"></div>
+    <div class="footer-note">Ctrl+Shift+Space to toggle · Esc to close</div>
+  </div>
+
+  <script src="overlay.js"></script>
+</body>
+</html>

@@ -1,0 +1,2222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>easy-rewind — Learning Dashboard</title>
+  <meta name="description" content="Your personal learning history dashboard. View, search, and manage all your saved bookmarks from the easy-rewind Chrome extension." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ══════════════════════════════════════════════
+       DESIGN SYSTEM — Modern Glass Edition
+    ══════════════════════════════════════════════ */
+    :root {
+      --bg-0: #06060e;
+      --bg-1: rgba(12, 12, 26, 0.9);
+      --bg-2: rgba(18, 18, 38, 0.85);
+      --bg-card: rgba(26, 26, 52, 0.7);
+      --bg-card-hover: rgba(34, 34, 64, 0.85);
+      --bg-input: rgba(34, 34, 62, 0.65);
+
+      --glass-border: rgba(139, 92, 246, 0.12);
+      --glass-border-md: rgba(139, 92, 246, 0.28);
+      --glass-border-focus: rgba(167, 139, 250, 0.5);
+      --glass-highlight: rgba(255, 255, 255, 0.04);
+
+      --purple-400: #a78bfa;
+      --purple-500: #8b5cf6;
+      --purple-600: #7c3aed;
+      --indigo-500: #6366f1;
+      --pink-500: #ec4899;
+
+      --gradient:        linear-gradient(135deg, #7c3aed 0%, #6366f1 50%, #ec4899 100%);
+      --gradient-soft:   linear-gradient(135deg, rgba(124,58,237,0.12) 0%, rgba(99,102,241,0.08) 100%);
+      --gradient-text:   linear-gradient(135deg, #a78bfa 0%, #818cf8 50%, #f472b6 100%);
+      --gradient-glass:  linear-gradient(135deg, rgba(124,58,237,0.06) 0%, rgba(99,102,241,0.04) 50%, transparent 100%);
+
+      --text-100: #f5f3ff;
+      --text-200: #c4b5fd;
+      --text-300: #b8b4d8;
+      --text-400: #6b6890;
+
+      --radius-sm: 10px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-xl: 28px;
+
+      --shadow-card: 0 4px 28px rgba(0,0,0,0.35), inset 0 1px 0 var(--glass-highlight);
+      --shadow-hover: 0 10px 48px rgba(0,0,0,0.5), 0 0 32px rgba(124,58,237,0.15), inset 0 1px 0 rgba(255,255,255,0.06);
+
+      --transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+      --transition-slow: all 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    /* ══════════════════════════════════════════════
+       RESET & BASE
+    ══════════════════════════════════════════════ */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg-0);
+      color: var(--text-100);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.25); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.4); }
+
+    /* ══════════════════════════════════════════════
+       ANIMATED BACKGROUND GRADIENT ORBs
+    ══════════════════════════════════════════════ */
+    .bg-orbs {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+      z-index: 0;
+    }
+
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(100px);
+      opacity: 0.08;
+      animation: drift 25s ease-in-out infinite;
+    }
+
+    .orb-1 { width: 700px; height: 700px; background: #7c3aed; top: -250px; left: -200px; animation-delay: 0s; }
+    .orb-2 { width: 550px; height: 550px; background: #ec4899; bottom: -200px; right: -180px; animation-delay: -8s; }
+    .orb-3 { width: 450px; height: 450px; background: #6366f1; top: 35%; left: 35%; animation-delay: -16s; }
+
+    @keyframes drift {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33%       { transform: translate(40px, -40px) scale(1.08); }
+      66%       { transform: translate(-25px, 25px) scale(0.95); }
+    }
+
+    /* ══════════════════════════════════════════════
+       LAYOUT
+    ══════════════════════════════════════════════ */
+    .app-wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ══════════════════════════════════════════════
+       NAVBAR
+    ══════════════════════════════════════════════ */
+    .navbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--glass-border);
+      margin-bottom: 40px;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .nav-logo {
+      width: 44px;
+      height: 44px;
+      background: var(--gradient);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.3);
+      position: relative;
+      overflow: hidden;
+    }
+    .nav-logo::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.15) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .nav-name {
+      font-size: 20px;
+      font-weight: 800;
+      background: var(--gradient-text);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.5px;
+    }
+
+    .nav-tagline {
+      font-size: 11px;
+      color: var(--text-400);
+      font-weight: 400;
+    }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .server-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-400);
+      background: var(--bg-card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      padding: 6px 14px;
+      border-radius: 20px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ef4444;
+      transition: var(--transition);
+      box-shadow: 0 0 6px rgba(239,68,68,0.4);
+    }
+
+    .status-dot.online {
+      background: #34d399;
+      box-shadow: 0 0 8px rgba(52,211,153,0.5);
+    }
+
+    .btn-export {
+      background: var(--gradient);
+      color: white;
+      border: none;
+      padding: 9px 20px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: var(--transition);
+      font-family: 'Inter', sans-serif;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      box-shadow: 0 4px 15px rgba(124,58,237,0.3);
+      position: relative;
+      overflow: hidden;
+    }
+    .btn-export::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .btn-export:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 28px rgba(124,58,237,0.45);
+    }
+
+    /* ══════════════════════════════════════════════
+       HERO STATS SECTION
+    ══════════════════════════════════════════════ */
+    .hero-section {
+      margin-bottom: 36px;
+    }
+
+    .hero-title {
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: -0.8px;
+      margin-bottom: 6px;
+      line-height: 1.15;
+    }
+
+    .hero-title span {
+      background: var(--gradient-text);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-subtitle {
+      font-size: 15px;
+      color: var(--text-300);
+      margin-bottom: 32px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 22px 24px;
+      position: relative;
+      overflow: hidden;
+      transition: var(--transition-slow);
+      box-shadow: var(--shadow-card);
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--gradient);
+      opacity: 0;
+      transition: var(--transition);
+    }
+
+    .stat-card:hover {
+      border-color: var(--glass-border-md);
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-hover);
+      background: var(--bg-card-hover);
+    }
+
+    .stat-card:hover::before { opacity: 1; }
+
+    .stat-icon {
+      font-size: 22px;
+      margin-bottom: 10px;
+    }
+
+    .stat-number {
+      font-size: 36px;
+      font-weight: 800;
+      background: var(--gradient-text);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -1.5px;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-400);
+      font-weight: 500;
+    }
+
+    /* ══════════════════════════════════════════════
+       TOOLBAR (Search + Filters)
+    ══════════════════════════════════════════════ */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .search-container {
+      flex: 1;
+      min-width: 280px;
+      position: relative;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 15px;
+      color: var(--text-400);
+      pointer-events: none;
+    }
+
+    .search-input {
+      width: 100%;
+      background: var(--bg-card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-md);
+      padding: 13px 16px 13px 44px;
+      color: var(--text-100);
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      transition: var(--transition);
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: var(--glass-border-focus);
+      box-shadow: 0 0 0 3px rgba(139,92,246,0.1), 0 0 20px rgba(124,58,237,0.12);
+      background: var(--bg-card-hover);
+    }
+
+    .search-input::placeholder { color: var(--text-400); }
+
+    .filter-select {
+      background: var(--bg-card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-md);
+      padding: 13px 16px;
+      color: var(--text-100);
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      cursor: pointer;
+      transition: var(--transition);
+      outline: none;
+      min-width: 140px;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b6890' viewBox='0 0 24 24'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding-right: 36px;
+    }
+
+    .filter-select:focus {
+      border-color: var(--glass-border-focus);
+      box-shadow: 0 0 0 3px rgba(139,92,246,0.1);
+    }
+
+    .filter-select option {
+      background: #1a1a38;
+      color: var(--text-100);
+    }
+
+    .view-toggle {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+    }
+
+    .view-btn {
+      background: none;
+      border: none;
+      color: var(--text-400);
+      padding: 7px 11px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 17px;
+      transition: var(--transition);
+      line-height: 1;
+    }
+
+    .view-btn.active {
+      background: var(--gradient);
+      color: white;
+      box-shadow: 0 2px 8px rgba(124,58,237,0.3);
+    }
+
+    .view-btn:hover:not(.active) {
+      background: var(--bg-card-hover);
+      color: var(--text-200);
+    }
+
+    /* ══════════════════════════════════════════════
+       TOPIC FILTER PILLS
+    ══════════════════════════════════════════════ */
+    .topic-pills {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+
+    .topic-pill {
+      background: var(--bg-card);
+      backdrop-filter: blur(4px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 6px 16px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-300);
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .topic-pill:hover {
+      border-color: var(--glass-border-md);
+      color: var(--text-200);
+      background: var(--bg-card-hover);
+    }
+
+    .topic-pill.active {
+      background: var(--gradient);
+      border-color: transparent;
+      color: white;
+      box-shadow: 0 4px 16px rgba(124,58,237,0.35);
+    }
+
+    /* ══════════════════════════════════════════════
+       RESULTS INFO BAR
+    ══════════════════════════════════════════════ */
+    .results-info {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: var(--text-400);
+    }
+
+    .results-count {
+      font-weight: 500;
+    }
+
+    .results-count span {
+      color: var(--purple-400);
+      font-weight: 700;
+    }
+
+    /* ══════════════════════════════════════════════
+       BOOKMARKS GRID VIEW
+    ══════════════════════════════════════════════ */
+    .bookmarks-container {
+      min-height: 300px;
+    }
+
+    /* Grid layout */
+    .bookmarks-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    /* List layout */
+    .bookmarks-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* ── GLASS CARD SHARED ── */
+    .glass-surface {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+    }
+
+    /* ── Bookmark Card (Grid) ── */
+    .bookmark-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 22px;
+      position: relative;
+      cursor: pointer;
+      transition: var(--transition-slow);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      animation: cardEnter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .bookmark-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: var(--gradient-glass);
+      pointer-events: none;
+      opacity: 0;
+      transition: var(--transition-slow);
+    }
+
+    .bookmark-card::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gradient);
+      opacity: 0;
+      transition: var(--transition);
+    }
+
+    .bookmark-card:hover {
+      border-color: var(--glass-border-md);
+      transform: translateY(-5px) scale(1.015);
+      box-shadow: var(--shadow-hover);
+    }
+
+    .bookmark-card:hover::before { opacity: 1; }
+    .bookmark-card:hover::after { opacity: 1; }
+
+    @keyframes cardEnter {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-topic-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(124,58,237,0.12);
+      border: 1px solid rgba(139,92,246,0.2);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--purple-400);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      width: fit-content;
+      backdrop-filter: blur(4px);
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-100);
+      line-height: 1.3;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .card-url {
+      font-size: 12px;
+      color: var(--text-400);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .card-url-favicon {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .card-notes {
+      font-size: 12px;
+      color: var(--text-300);
+      line-height: 1.5;
+      font-style: italic;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      background: var(--gradient-soft);
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      border-left: 2px solid var(--purple-600);
+    }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: auto;
+      padding-top: 6px;
+      border-top: 1px solid var(--glass-border);
+    }
+
+    .card-date {
+      font-size: 11px;
+      color: var(--text-400);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 6px;
+      opacity: 0;
+      transition: var(--transition);
+    }
+
+    .bookmark-card:hover .card-actions {
+      opacity: 1;
+    }
+
+    .action-btn {
+      background: var(--bg-input);
+      backdrop-filter: blur(4px);
+      border: 1px solid var(--glass-border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: var(--transition);
+      color: var(--text-300);
+      font-family: 'Inter', sans-serif;
+    }
+
+    .action-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--glass-border-md);
+    }
+
+    .action-btn.delete:hover {
+      background: rgba(239,68,68,0.12);
+      border-color: rgba(239,68,68,0.3);
+      color: #f87171;
+    }
+
+    /* ── Bookmark Row (List view) ── */
+    .bookmark-row {
+      background: var(--bg-card);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-md);
+      padding: 14px 18px;
+      display: grid;
+      grid-template-columns: auto 1fr auto auto auto;
+      align-items: center;
+      gap: 14px;
+      cursor: pointer;
+      transition: var(--transition);
+      box-shadow: var(--shadow-card);
+      animation: cardEnter 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .bookmark-row:hover {
+      border-color: var(--glass-border-md);
+      background: var(--bg-card-hover);
+      transform: translateX(4px);
+    }
+
+    .row-topic {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--purple-400);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      min-width: 100px;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-info { min-width: 0; }
+
+    .row-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-100);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 2px;
+    }
+
+    .row-url {
+      font-size: 11px;
+      color: var(--text-400);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-date {
+      font-size: 11px;
+      color: var(--text-400);
+      white-space: nowrap;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 6px;
+      opacity: 0;
+      transition: var(--transition);
+    }
+
+    .bookmark-row:hover .row-actions { opacity: 1; }
+
+    /* ══════════════════════════════════════════════
+       EMPTY STATE
+    ══════════════════════════════════════════════ */
+    .empty-state {
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--text-400);
+    }
+
+    .empty-state-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .empty-state-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-300);
+      margin-bottom: 8px;
+    }
+
+    .empty-state-text {
+      font-size: 14px;
+      line-height: 1.6;
+      max-width: 380px;
+      margin: 0 auto;
+      color: var(--text-400);
+    }
+
+    /* ══════════════════════════════════════════════
+       LOADING SKELETON
+    ══════════════════════════════════════════════ */
+    .skeleton {
+      background: var(--bg-card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      animation: shimmer 1.5s ease infinite;
+    }
+
+    .skeleton-line {
+      height: 12px;
+      background: var(--bg-input);
+      border-radius: 6px;
+      margin-bottom: 12px;
+    }
+
+    .skeleton-line.short { width: 40%; }
+    .skeleton-line.medium { width: 70%; }
+    .skeleton-line.full { width: 100%; }
+
+    @keyframes shimmer {
+      0%, 100% { opacity: 0.4; }
+      50%       { opacity: 0.9; }
+    }
+
+    /* ══════════════════════════════════════════════
+       TOAST NOTIFICATIONS
+    ══════════════════════════════════════════════ */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .toast {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-md);
+      padding: 12px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      max-width: 320px;
+      box-shadow: var(--shadow-hover);
+      animation: toastIn 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toast.success { border-color: rgba(52,211,153,0.3); color: #34d399; }
+    .toast.error   { border-color: rgba(239,68,68,0.3);  color: #f87171; }
+    .toast.info    { border-color: var(--glass-border-md); color: var(--purple-400); }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(24px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ══════════════════════════════════════════════
+       DELETE CONFIRM MODAL
+    ══════════════════════════════════════════════ */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 500;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      animation: fadeIn 0.2s ease;
+    }
+
+    .modal-overlay.hidden { display: none; }
+
+    .modal {
+      background: rgba(26, 26, 56, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border-md);
+      border-radius: var(--radius-xl);
+      padding: 36px;
+      max-width: 380px;
+      width: 90%;
+      box-shadow: var(--shadow-hover);
+      animation: modalIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    @keyframes modalIn {
+      from { opacity: 0; transform: scale(0.92); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+
+    .modal-icon { font-size: 40px; margin-bottom: 14px; }
+    .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .modal-text { font-size: 13px; color: var(--text-300); margin-bottom: 28px; line-height: 1.6; }
+
+    .modal-actions { display: flex; gap: 10px; }
+
+    .modal-btn {
+      flex: 1;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      transition: var(--transition);
+    }
+
+    .modal-btn.cancel {
+      background: var(--bg-input);
+      backdrop-filter: blur(4px);
+      color: var(--text-300);
+      border: 1px solid var(--glass-border);
+    }
+
+    .modal-btn.cancel:hover { background: var(--bg-card-hover); color: var(--text-100); }
+
+    .modal-btn.confirm-delete {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: white;
+      box-shadow: 0 4px 18px rgba(239,68,68,0.3);
+    }
+
+    .modal-btn.confirm-delete:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(239,68,68,0.4); }
+
+    /* ══════════════════════════════════════════════
+       FOOTER
+    ══════════════════════════════════════════════ */
+    .page-footer {
+      margin-top: 60px;
+      padding: 24px 0;
+      border-top: 1px solid var(--glass-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-400);
+      font-size: 12px;
+    }
+
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--text-300);
+    }
+
+    /* ══════════════════════════════════════════════
+       DASHBOARD CONTENT TABS
+    ══════════════════════════════════════════════ */
+    .dashboard-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      background: var(--bg-card);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-md);
+      padding: 4px;
+    }
+
+    .dashboard-tab {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      background: none;
+      color: var(--text-400);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      transition: var(--transition);
+      font-family: 'Inter', sans-serif;
+      text-align: center;
+    }
+
+    .dashboard-tab:hover {
+      color: var(--text-300);
+      background: rgba(255,255,255,0.04);
+    }
+
+    .dashboard-tab.active {
+      background: var(--gradient);
+      color: white;
+      box-shadow: 0 4px 16px rgba(124,58,237,0.3);
+    }
+
+    .content-panel { display: none; }
+    .content-panel.active-panel { display: block; }
+
+    /* ── Notes Card ── */
+    .notes-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 14px;
+    }
+
+    .note-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      position: relative;
+      transition: var(--transition-slow);
+      box-shadow: var(--shadow-card);
+      animation: cardEnter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .note-card:hover {
+      border-color: var(--glass-border-md);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-hover);
+    }
+
+    .note-card.completed { opacity: 0.5; }
+
+    .note-content {
+      font-size: 13px;
+      color: var(--text-100);
+      line-height: 1.6;
+      margin-bottom: 10px;
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .note-source {
+      font-size: 11px;
+      color: var(--text-400);
+      margin-bottom: 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .note-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--glass-border);
+      padding-top: 8px;
+    }
+
+    .note-meta {
+      font-size: 10px;
+      color: var(--text-400);
+    }
+
+    /* ── Highlights Card ── */
+    .highlights-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 14px;
+    }
+
+    .highlight-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      transition: var(--transition-slow);
+      box-shadow: var(--shadow-card);
+      animation: cardEnter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+      position: relative;
+    }
+
+    .highlight-card:hover {
+      border-color: var(--glass-border-md);
+      box-shadow: var(--shadow-hover);
+    }
+
+    .highlight-quote {
+      font-size: 14px;
+      font-style: italic;
+      line-height: 1.7;
+      color: var(--text-100);
+      padding: 12px 16px;
+      margin: 8px 0;
+      border-left: 3px solid var(--purple-500);
+      background: linear-gradient(135deg, rgba(139,92,246,0.06), transparent);
+      border-radius: 0 10px 10px 0;
+    }
+
+    .highlight-source {
+      font-size: 12px;
+      color: var(--text-400);
+      margin-top: 6px;
+    }
+
+    .highlight-color-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+
+    /* ── Research Card ── */
+    .research-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 14px;
+    }
+
+    .research-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      transition: var(--transition-slow);
+      box-shadow: var(--shadow-card);
+      animation: cardEnter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .research-card:hover {
+      border-color: var(--glass-border-md);
+      box-shadow: var(--shadow-hover);
+    }
+
+    .research-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-100);
+      margin-bottom: 4px;
+    }
+
+    .research-url {
+      font-size: 11px;
+      color: var(--text-400);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 8px;
+    }
+
+    .research-result {
+      font-size: 12px;
+      color: var(--text-300);
+      line-height: 1.5;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      background: var(--gradient-soft);
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
+      display: none;
+    }
+
+    .research-result.visible { display: block; }
+
+    .research-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .research-status-badge {
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .research-status-badge.done { background: rgba(52,211,153,0.12); color: #34d399; border: 1px solid rgba(52,211,153,0.2); }
+    .research-status-badge.processing { background: rgba(245,158,11,0.12); color: #f59e0b; border: 1px solid rgba(245,158,11,0.2); }
+    .research-status-badge.failed { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
+    .research-status-badge.pending { background: rgba(139,92,246,0.12); color: var(--purple-400); border: 1px solid var(--glass-border); }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    /* ══════════════════════════════════════════════
+       RESPONSIVE
+    ══════════════════════════════════════════════ */
+    @media (max-width: 768px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .search-container { min-width: unset; }
+      .bookmarks-grid { grid-template-columns: 1fr; }
+      .bookmark-row { grid-template-columns: 1fr; }
+      .hero-title { font-size: 28px; }
+    }
+
+    @media (max-width: 480px) {
+      .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+      .hero-title { font-size: 24px; }
+      .nav-tagline { display: none; }
+      .stat-number { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Background orbs -->
+  <div class="bg-orbs" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="app-wrapper">
+    <!-- ══════════════════════════════════════
+         NAVBAR
+    ══════════════════════════════════════ -->
+    <nav class="navbar" role="navigation" aria-label="Main navigation">
+      <a href="/dashboard" class="nav-brand" aria-label="easy-rewind home">
+        <div class="nav-logo" aria-hidden="true">⏪</div>
+        <div>
+          <div class="nav-name">easy-rewind</div>
+          <div class="nav-tagline">Learning Assistant Dashboard</div>
+        </div>
+      </a>
+      <div class="nav-right">
+        <div class="server-indicator" role="status" aria-live="polite">
+          <div class="status-dot" id="server-dot"></div>
+          <span id="server-label">Connecting...</span>
+        </div>
+        <button class="btn-export" id="export-csv-btn" aria-label="Export all bookmarks as CSV" title="Export bookmarks as CSV">
+          📥 CSV
+        </button>
+        <button class="btn-export" id="export-json-btn" aria-label="Export all data as JSON" title="Export all data as JSON">
+          💾 Export JSON
+        </button>
+        <label class="btn-export" id="import-btn" style="cursor:pointer;" title="Import data from JSON export file">
+          📂 Import
+          <input type="file" id="import-file-input" accept=".json" style="display:none;" />
+        </label>
+      </div>
+    </nav>
+
+    <!-- ══════════════════════════════════════
+         HERO + STATS
+    ══════════════════════════════════════ -->
+    <section class="hero-section" aria-labelledby="dashboard-heading">
+      <h1 class="hero-title" id="dashboard-heading">
+        Your <span>Learning History</span>
+      </h1>
+      <p class="hero-subtitle">Everything you've saved, organized and searchable.</p>
+
+      <div class="stats-grid" role="region" aria-label="Learning statistics">
+        <div class="stat-card" aria-label="Total bookmarks">
+          <div class="stat-icon" aria-hidden="true">🔖</div>
+          <div class="stat-number" id="stat-total">—</div>
+          <div class="stat-label">Total Bookmarks</div>
+        </div>
+        <div class="stat-card" aria-label="Unique topics">
+          <div class="stat-icon" aria-hidden="true">🏷️</div>
+          <div class="stat-number" id="stat-topics">—</div>
+          <div class="stat-label">Unique Topics</div>
+        </div>
+        <div class="stat-card" aria-label="Bookmarks this week">
+          <div class="stat-icon" aria-hidden="true">📅</div>
+          <div class="stat-number" id="stat-week">—</div>
+          <div class="stat-label">This Week</div>
+        </div>
+        <div class="stat-card" aria-label="Most recent bookmark">
+          <div class="stat-icon" aria-hidden="true">⚡</div>
+          <div class="stat-number" id="stat-latest" style="font-size:18px; letter-spacing:-0.3px;">—</div>
+          <div class="stat-label">Latest Save</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         TOOLBAR
+    ══════════════════════════════════════ -->
+    <div class="toolbar" role="search" aria-label="Bookmark search and filters">
+      <div class="search-container">
+        <span class="search-icon" aria-hidden="true">🔍</span>
+        <input
+          type="search"
+          class="search-input"
+          id="search-input"
+          placeholder="Search topics, titles, URLs, notes..."
+          autocomplete="off"
+          aria-label="Search your bookmarks"
+        />
+      </div>
+
+      <select class="filter-select" id="sort-select" aria-label="Sort bookmarks by">
+        <option value="newest">⬇️ Newest First</option>
+        <option value="oldest">⬆️ Oldest First</option>
+        <option value="alphabetical">🔤 A–Z by Title</option>
+        <option value="topic">🏷️ By Topic</option>
+      </select>
+
+      <div class="view-toggle" role="group" aria-label="View mode">
+        <button class="view-btn active" id="grid-view-btn" title="Grid view" aria-pressed="true">⊞</button>
+        <button class="view-btn" id="list-view-btn" title="List view" aria-pressed="false">☰</button>
+      </div>
+    </div>
+
+    <!-- Topic filter pills -->
+    <div class="topic-pills" id="topic-pills" role="group" aria-label="Filter by topic">
+      <!-- Dynamically populated -->
+    </div>
+
+    <!-- Results info bar -->
+    <div class="results-info">
+      <div class="results-count" id="results-count" aria-live="polite">Loading...</div>
+      <div id="search-clear-btn" style="display:none;">
+        <button class="action-btn" id="clear-search-btn" aria-label="Clear search">✕ Clear search</button>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════
+         CONTENT TABS (Bookmarks / Notes / Research)
+    ══════════════════════════════════════ -->
+    <div class="dashboard-tabs" role="tablist" aria-label="Content type">
+      <button class="dashboard-tab active" data-tab="bookmarks" role="tab" aria-selected="true">🔖 Bookmarks</button>
+      <button class="dashboard-tab" data-tab="notes" role="tab" aria-selected="false">📝 Notes</button>
+      <button class="dashboard-tab" data-tab="research" role="tab" aria-selected="false">🧠 Research</button>
+      <button class="dashboard-tab" data-tab="highlights" role="tab" aria-selected="false">🖍 Highlights</button>
+    </div>
+
+    <!-- Bookmarks tab -->
+    <main id="bookmarks-container" class="bookmarks-container bookmarks-grid content-panel active-panel" aria-label="Bookmarks" data-panel="bookmarks">
+      <!-- Skeleton loading state -->
+      <div class="skeleton" aria-hidden="true">
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-line medium"></div>
+        <div class="skeleton-line full"></div>
+      </div>
+      <div class="skeleton" aria-hidden="true">
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-line medium"></div>
+        <div class="skeleton-line full"></div>
+      </div>
+      <div class="skeleton" aria-hidden="true">
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-line medium"></div>
+        <div class="skeleton-line full"></div>
+      </div>
+    </main>
+
+    <!-- Notes tab -->
+    <main id="notes-container" class="bookmarks-container content-panel" aria-label="Notes" data-panel="notes" style="display:none;">
+      <div class="notes-grid" id="notes-grid">
+        <!-- Populated by JS -->
+      </div>
+    </main>
+
+    <!-- Research tab -->
+    <main id="research-container" class="bookmarks-container content-panel" aria-label="Research" data-panel="research" style="display:none;">
+      <div class="research-grid" id="research-grid">
+        <!-- Populated by JS -->
+      </div>
+    </main>
+
+    <!-- Highlights tab -->
+    <main id="highlights-container" class="bookmarks-container content-panel" aria-label="Highlights" data-panel="highlights" style="display:none;">
+      <div class="highlights-grid" id="highlights-grid">
+        <!-- Populated by JS -->
+      </div>
+    </main>
+
+    <!-- ══════════════════════════════════════
+         FOOTER
+    ══════════════════════════════════════ -->
+    <footer class="page-footer">
+      <div class="footer-brand">
+        <span>⏪</span>
+        <span>easy-rewind Learning Assistant</span>
+      </div>
+      <div>Built with ♥ for curious learners</div>
+    </footer>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       DELETE CONFIRMATION MODAL
+  ══════════════════════════════════════ -->
+  <div class="modal-overlay hidden" id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal">
+      <div class="modal-icon" aria-hidden="true">🗑️</div>
+      <div class="modal-title" id="modal-title">Delete Bookmark?</div>
+      <div class="modal-text">
+        This will permanently delete this bookmark. You can always re-save it from the extension.
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn cancel" id="modal-cancel-btn">Keep It</button>
+        <button class="modal-btn confirm-delete" id="modal-confirm-btn">Yes, Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       TOAST NOTIFICATIONS
+  ══════════════════════════════════════ -->
+  <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    /**
+     * easy-rewind Dashboard — dashboard.js (inline)
+     * 
+     * Handles the full dashboard functionality:
+     * - Loading and displaying all bookmarks
+     * - Real-time search with debounce
+     * - Filter by topic pills
+     * - Sort (newest, oldest, alphabetical, topic)
+     * - Grid/list view toggle
+     * - CSV export
+     * - Bookmark deletion with confirmation modal
+     * - Stats display
+     * - Server health indicator
+     */
+
+    // ─────────────────────────────────────────────
+    // CONSTANTS
+    // ─────────────────────────────────────────────
+    const API_BASE = 'http://localhost:5000/api';
+    const USER_ID_KEY = 'easy_rewind_dashboard_user_id';
+
+    // ─────────────────────────────────────────────
+    // STATE
+    // ─────────────────────────────────────────────
+    let allBookmarks = [];         // Full list loaded from server
+    let filteredBookmarks = [];    // After search/filter applied
+    let currentView = 'grid';      // 'grid' or 'list'
+    let currentSort = 'newest';
+    let currentSearch = '';
+    let currentTopicFilter = 'all';
+    let pendingDeleteId = null;
+    let userId = '';
+
+    // ─────────────────────────────────────────────
+    // DOM REFERENCES
+    // ─────────────────────────────────────────────
+    const D = {
+      serverDot:      document.getElementById('server-dot'),
+      serverLabel:    document.getElementById('server-label'),
+      exportBtn:      document.getElementById('export-csv-btn'),
+      exportJsonBtn:  document.getElementById('export-json-btn'),
+      importFileInput: document.getElementById('import-file-input'),
+      statTotal:      document.getElementById('stat-total'),
+      statTopics:     document.getElementById('stat-topics'),
+      statWeek:       document.getElementById('stat-week'),
+      statLatest:     document.getElementById('stat-latest'),
+      searchInput:    document.getElementById('search-input'),
+      sortSelect:     document.getElementById('sort-select'),
+      gridViewBtn:    document.getElementById('grid-view-btn'),
+      listViewBtn:    document.getElementById('list-view-btn'),
+      topicPills:     document.getElementById('topic-pills'),
+      resultsCount:   document.getElementById('results-count'),
+      searchClearDiv: document.getElementById('search-clear-btn'),
+      clearSearchBtn: document.getElementById('clear-search-btn'),
+      container:      document.getElementById('bookmarks-container'),
+      deleteModal:    document.getElementById('delete-modal'),
+      modalCancelBtn: document.getElementById('modal-cancel-btn'),
+      modalConfirmBtn:document.getElementById('modal-confirm-btn'),
+      toastContainer: document.getElementById('toast-container'),
+    };
+
+    // ─────────────────────────────────────────────
+    // UTILITIES
+    // ─────────────────────────────────────────────
+
+    function getUserId() {
+      let id = localStorage.getItem(USER_ID_KEY);
+      if (!id) {
+        id = 'dash_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        localStorage.setItem(USER_ID_KEY, id);
+      }
+      userId = id;
+      return id;
+    }
+
+    async function apiCall(path, opts = {}) {
+      const res = await fetch(`${API_BASE}${path}`, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId,
+          ...(opts.headers || {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    function escapeHtml(str) {
+      const d = document.createElement('div');
+      d.textContent = str || '';
+      return d.innerHTML;
+    }
+
+    function truncate(str, max) {
+      if (!str) return '';
+      return str.length > max ? str.slice(0, max) + '…' : str;
+    }
+
+    function parseDbDate(dateStr) {
+      if (!dateStr) return new Date();
+      const normalized = dateStr.replace(' ', 'T');
+      return new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z');
+    }
+
+    function formatDate(dateStr) {
+      const d = parseDbDate(dateStr);
+      const now = new Date();
+      const diffMs = now - d;
+      // Handle Invalid Date and future dates gracefully
+      if (isNaN(diffMs)) return 'Just now';
+      if (diffMs < 0) return 'Just now';
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+
+      if (diffMins < 1)  return 'Just now';
+      if (diffMins < 60) return `${diffMins}m ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 7)  return `${diffDays}d ago`;
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: diffDays > 365 ? 'numeric' : undefined });
+    }
+
+    function getDomain(url) {
+      try { return new URL(url).hostname; }
+      catch { return ''; }
+    }
+
+    function getFaviconUrl(url) {
+      const domain = getDomain(url);
+      return domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '';
+    }
+
+    function showToast(message, type = 'info', duration = 3000) {
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      const icons = { success: '✅', error: '❌', info: '💡' };
+      toast.innerHTML = `<span>${icons[type] || '💡'}</span> ${escapeHtml(message)}`;
+      D.toastContainer.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+      }, duration);
+    }
+
+    // ─────────────────────────────────────────────
+    // SERVER HEALTH CHECK
+    // ─────────────────────────────────────────────
+    async function checkHealth() {
+      try {
+        await apiCall('/health');
+        D.serverDot.classList.add('online');
+        D.serverLabel.textContent = 'Server online';
+      } catch {
+        D.serverDot.classList.remove('online');
+        D.serverLabel.textContent = 'Server offline';
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // STATS COMPUTATION
+    // ─────────────────────────────────────────────
+    function computeStats(bookmarks) {
+      const total = bookmarks.length;
+      const topics = new Set(bookmarks.map(b => b.topic?.toLowerCase())).size;
+
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+      const thisWeek = bookmarks.filter(b => new Date(b.created_at) > oneWeekAgo).length;
+
+      const latest = bookmarks.length > 0 ? formatDate(bookmarks[0].created_at) : '—';
+
+      D.statTotal.textContent  = total;
+      D.statTopics.textContent = topics;
+      D.statWeek.textContent   = thisWeek;
+      D.statLatest.textContent = latest;
+      D.statLatest.style.fontSize = latest.length > 8 ? '14px' : '18px';
+    }
+
+    // ─────────────────────────────────────────────
+    // TOPIC PILLS
+    // ─────────────────────────────────────────────
+    function renderTopicPills(bookmarks) {
+      // Normalize case when deduplicating to match backend stats
+      const seen = new Set();
+      const unique = bookmarks.filter(b => {
+        if (!b.topic) return false;
+        const low = b.topic.toLowerCase();
+        if (seen.has(low)) return false;
+        seen.add(low);
+        return true;
+      }).map(b => b.topic);
+      const topics = ['All', ...unique].slice(0, 20);
+
+      D.topicPills.innerHTML = topics.map((topic) => {
+        const val = topic === 'All' ? 'all' : topic;
+        const isActive = currentTopicFilter === val;
+        return `<button class="topic-pill ${isActive ? 'active' : ''}" 
+          data-topic="${escapeHtml(val)}"
+          aria-pressed="${isActive}">
+          ${escapeHtml(topic)}
+        </button>`;
+      }).join('');
+
+      D.topicPills.querySelectorAll('.topic-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          currentTopicFilter = pill.dataset.topic;
+          applyFilters();
+          renderTopicPills(allBookmarks); // Re-render pills to update active state
+        });
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // FILTERING & SORTING
+    // ─────────────────────────────────────────────
+    function applyFilters() {
+      let result = [...allBookmarks];
+
+      // Filter by topic
+      if (currentTopicFilter !== 'all') {
+        result = result.filter(b => b.topic === currentTopicFilter);
+      }
+
+      // Filter by search query
+      if (currentSearch) {
+        const q = currentSearch.toLowerCase();
+        result = result.filter(b =>
+          (b.topic || '').toLowerCase().includes(q) ||
+          (b.title || '').toLowerCase().includes(q) ||
+          (b.url || '').toLowerCase().includes(q) ||
+          (b.notes || '').toLowerCase().includes(q)
+        );
+      }
+
+      // Sort
+      switch (currentSort) {
+        case 'oldest':
+          result.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          break;
+        case 'alphabetical':
+          result.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+          break;
+        case 'topic':
+          result.sort((a, b) => (a.topic || '').localeCompare(b.topic || ''));
+          break;
+        default: // newest
+          result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      }
+
+      filteredBookmarks = result;
+
+      // Update results count
+      D.resultsCount.innerHTML = `Showing <span>${result.length}</span> of <span>${allBookmarks.length}</span> bookmarks`;
+
+      // Show/hide clear button
+      const hasFilters = currentSearch || currentTopicFilter !== 'all';
+      D.searchClearDiv.style.display = hasFilters ? 'block' : 'none';
+
+      renderBookmarks(result);
+    }
+
+    // ─────────────────────────────────────────────
+    // RENDERING
+    // ─────────────────────────────────────────────
+    function renderBookmarks(bookmarks) {
+      if (bookmarks.length === 0) {
+        D.container.innerHTML = `
+          <div class="empty-state" style="grid-column: 1/-1;">
+            <div class="empty-state-icon">${currentSearch ? '🔍' : '📚'}</div>
+            <div class="empty-state-title">${currentSearch ? 'No results found' : 'No bookmarks yet'}</div>
+            <div class="empty-state-text">
+              ${currentSearch
+                ? `No bookmarks match "<strong>${escapeHtml(currentSearch)}</strong>". Try different keywords.`
+                : 'Open the Chrome extension and click "Bookmark" to save your first page!'
+              }
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      if (currentView === 'grid') {
+        renderGrid(bookmarks);
+      } else {
+        renderList(bookmarks);
+      }
+    }
+
+    function renderGrid(bookmarks) {
+      D.container.innerHTML = bookmarks.map((bm, i) => {
+        const domain = getDomain(bm.url);
+        const faviconUrl = getFaviconUrl(bm.url);
+
+        return `
+          <article class="bookmark-card" 
+            data-id="${bm.id}" 
+            data-url="${escapeHtml(bm.url)}"
+            style="animation-delay: ${Math.min(i * 30, 300)}ms"
+            role="article"
+            aria-label="Bookmark: ${escapeHtml(bm.title || bm.url)}">
+
+            <div class="card-topic-badge">
+              🏷️ ${escapeHtml(truncate(bm.topic, 30))}
+            </div>
+
+            <div class="card-title">${escapeHtml(bm.title || bm.url)}</div>
+
+            <div class="card-url">
+              ${faviconUrl ? `<img class="card-url-favicon" src="${faviconUrl}" alt="" loading="lazy" onerror="this.style.display='none'"/>` : ''}
+              <span>${escapeHtml(truncate(domain || bm.url, 50))}</span>
+            </div>
+
+            ${bm.notes ? `<div class="card-notes">"${escapeHtml(truncate(bm.notes, 120))}"</div>` : ''}
+
+            <div class="card-footer">
+              <div class="card-date">
+                🕒 ${formatDate(bm.created_at)}
+              </div>
+              <div class="card-actions">
+                <button class="action-btn open-btn" data-url="${escapeHtml(bm.url)}" aria-label="Open bookmark">↗️ Open</button>
+                <button class="action-btn delete delete-btn" data-id="${bm.id}" aria-label="Delete bookmark">🗑️</button>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join('');
+
+      attachCardEvents();
+    }
+
+    function renderList(bookmarks) {
+      D.container.innerHTML = bookmarks.map((bm, i) => {
+        const domain = getDomain(bm.url);
+
+        return `
+          <article class="bookmark-row"
+            data-id="${bm.id}"
+            data-url="${escapeHtml(bm.url)}"
+            style="animation-delay: ${Math.min(i * 20, 200)}ms"
+            role="article"
+            aria-label="Bookmark: ${escapeHtml(bm.title || bm.url)}">
+
+            <div class="row-topic">${escapeHtml(truncate(bm.topic, 20))}</div>
+            <div class="row-info">
+              <div class="row-title">${escapeHtml(truncate(bm.title || bm.url, 70))}</div>
+              <div class="row-url">${escapeHtml(truncate(domain || bm.url, 60))}</div>
+            </div>
+            <div class="row-date">${formatDate(bm.created_at)}</div>
+            <div class="row-actions">
+              <button class="action-btn open-btn" data-url="${escapeHtml(bm.url)}" aria-label="Open bookmark">↗️</button>
+              <button class="action-btn delete delete-btn" data-id="${bm.id}" aria-label="Delete bookmark">🗑️</button>
+            </div>
+          </article>
+        `;
+      }).join('');
+
+      attachCardEvents();
+    }
+
+    function attachCardEvents() {
+      // Click card/row to open URL
+      D.container.querySelectorAll('.bookmark-card, .bookmark-row').forEach(el => {
+        el.addEventListener('click', (e) => {
+          // Don't open if delete or open button was clicked (handled separately)
+          if (e.target.closest('.delete-btn') || e.target.closest('.open-btn')) return;
+          window.open(el.dataset.url, '_blank');
+        });
+      });
+
+      // Open buttons
+      D.container.querySelectorAll('.open-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          window.open(btn.dataset.url, '_blank');
+        });
+      });
+
+      // Delete buttons → show modal
+      D.container.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          pendingDeleteId = btn.dataset.id;
+          D.deleteModal.classList.remove('hidden');
+        });
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // DATA LOADING
+    // ─────────────────────────────────────────────
+    async function loadBookmarks() {
+      try {
+        const data = await apiCall(`/bookmarks?sort=${currentSort}`);
+        allBookmarks = data.bookmarks || [];
+
+        computeStats(allBookmarks);
+        renderTopicPills(allBookmarks);
+        applyFilters();
+
+      } catch (err) {
+        D.container.innerHTML = `
+          <div class="empty-state" style="grid-column: 1/-1;">
+            <div class="empty-state-icon">⚠️</div>
+            <div class="empty-state-title">Could not load bookmarks</div>
+            <div class="empty-state-text">${escapeHtml(err.message)}<br/><br/>Make sure the backend server is running:<br/><code>cd backend && npm start</code></div>
+          </div>
+        `;
+        showToast('Failed to load bookmarks. Is the server running?', 'error', 5000);
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // DELETE BOOKMARK
+    // ─────────────────────────────────────────────
+    async function deleteBookmark(id) {
+      try {
+        await apiCall(`/bookmark/${id}`, { method: 'DELETE' });
+
+        // Remove from local state
+        allBookmarks = allBookmarks.filter(b => b.id !== id && b.id !== parseInt(id));
+        applyFilters();
+        renderTopicPills(allBookmarks);
+        computeStats(allBookmarks);
+
+        showToast('Bookmark deleted.', 'success');
+      } catch (err) {
+        showToast('Failed to delete: ' + err.message, 'error');
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // CSV EXPORT
+    // ─────────────────────────────────────────────
+    function exportCSV() {
+      if (allBookmarks.length === 0) {
+        showToast('No bookmarks to export.', 'info');
+        return;
+      }
+
+      const headers = ['ID', 'Topic', 'Title', 'URL', 'Notes', 'Saved At'];
+      const rows = allBookmarks.map(bm => [
+        bm.id,
+        bm.topic || '',
+        bm.title || '',
+        bm.url || '',
+        (bm.notes || '').replace(/[\r\n,]/g, ' '),
+        bm.created_at || '',
+      ]);
+
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `easy-rewind-bookmarks-${new Date().toISOString().split('T')[0]}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      showToast(`Exported ${allBookmarks.length} bookmarks as CSV.`, 'success');
+    }
+
+    // ── Full JSON Export (all data) ──
+    async function exportFullJSON() {
+      try {
+        showToast('Preparing your full data export...', 'info');
+        const data = await apiCall('/export');
+        if (data.error) throw new Error(data.error);
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `easy-rewind-full-export-${new Date().toISOString().split('T')[0]}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+
+        showToast(`Exported ${data.data?.bookmarks?.length || 0} bookmarks, ${data.data?.notes?.length || 0} notes, ${data.data?.highlights?.length || 0} highlights, and more.`, 'success');
+      } catch (err) {
+        showToast('Export failed: ' + err.message, 'error');
+      }
+    }
+
+    // ── Import from JSON file ──
+    async function handleImportFile(file) {
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+
+        if (!data.data) throw new Error('Invalid export file — missing "data" field');
+
+        showToast(`Importing ${data.stats?.total || 'your'} items...`, 'info');
+        const result = await apiCall('/import', {
+          method: 'POST',
+          body: JSON.stringify({ data: data.data }),
+        });
+
+        if (result.error) throw new Error(result.error);
+        showToast(`✅ Imported ${result.imported?.bookmarks || 0} bookmarks, ${result.imported?.notes || 0} notes, ${result.imported?.highlights || 0} highlights.`, 'success');
+        // Refresh all views
+        notesLoaded = false; researchLoaded = false; highlightsLoaded = false;
+        loadBookmarks();
+        loadNotes();
+        // Research & highlights will reload when their tabs are next clicked
+      } catch (err) {
+        showToast('Import failed: ' + err.message, 'error');
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // VIEW TOGGLE
+    // ─────────────────────────────────────────────
+    function setView(view) {
+      currentView = view;
+
+      // Preserve content-panel and active-panel classes when switching view
+      const hadContentPanel = D.container.classList.contains('content-panel');
+      const hadActivePanel = D.container.classList.contains('active-panel');
+      D.container.className = `bookmarks-container bookmarks-${view}`;
+      if (hadContentPanel) D.container.classList.add('content-panel');
+      if (hadActivePanel) D.container.classList.add('active-panel');
+
+      D.gridViewBtn.classList.toggle('active', view === 'grid');
+      D.listViewBtn.classList.toggle('active', view === 'list');
+      D.gridViewBtn.setAttribute('aria-pressed', String(view === 'grid'));
+      D.listViewBtn.setAttribute('aria-pressed', String(view === 'list'));
+
+      renderBookmarks(filteredBookmarks);
+    }
+
+    // ─────────────────────────────────────────────
+    // EVENT WIRING
+    // ─────────────────────────────────────────────
+
+    // Search with debounce
+    let searchTimer;
+    D.searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        currentSearch = D.searchInput.value.trim();
+        applyFilters();
+      }, 250);
+    });
+
+    // Sort change
+    D.sortSelect.addEventListener('change', () => {
+      currentSort = D.sortSelect.value;
+      applyFilters();
+    });
+
+    // View toggle
+    D.gridViewBtn.addEventListener('click', () => setView('grid'));
+    D.listViewBtn.addEventListener('click', () => setView('list'));
+
+    // Export
+    D.exportBtn.addEventListener('click', exportCSV);
+    D.exportJsonBtn?.addEventListener('click', exportFullJSON);
+    D.importFileInput?.addEventListener('change', (e) => {
+      handleImportFile(e.target.files?.[0]);
+      e.target.value = ''; // reset so user can re-upload same file
+    });
+
+    // Clear search
+    D.clearSearchBtn.addEventListener('click', () => {
+      D.searchInput.value = '';
+      currentSearch = '';
+      currentTopicFilter = 'all';
+      applyFilters();
+      renderTopicPills(allBookmarks);
+    });
+
+    // Delete modal
+    D.modalCancelBtn.addEventListener('click', () => {
+      D.deleteModal.classList.add('hidden');
+      pendingDeleteId = null;
+    });
+
+    D.modalConfirmBtn.addEventListener('click', async () => {
+      D.deleteModal.classList.add('hidden');
+      if (pendingDeleteId) {
+        await deleteBookmark(pendingDeleteId);
+        pendingDeleteId = null;
+      }
+    });
+
+    // Close modal on overlay click
+    D.deleteModal.addEventListener('click', (e) => {
+      if (e.target === D.deleteModal) {
+        D.deleteModal.classList.add('hidden');
+        pendingDeleteId = null;
+      }
+    });
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !D.deleteModal.classList.contains('hidden')) {
+        D.deleteModal.classList.add('hidden');
+        pendingDeleteId = null;
+      }
+    });
+
+    // ═════════════════════════════════════════════════
+    // NOTES & RESEARCH (Dashboard tabs)
+    // ═════════════════════════════════════════════════
+
+    const D2 = {
+      notesGrid:          document.getElementById('notes-grid'),
+      researchGrid:       document.getElementById('research-grid'),
+      highlightsGrid:     document.getElementById('highlights-grid'),
+      dashboardTabs:      document.querySelectorAll('.dashboard-tab'),
+      bookmarksPanel:     document.querySelector('[data-panel="bookmarks"]'),
+      notesPanel:         document.querySelector('[data-panel="notes"]'),
+      researchPanel:      document.querySelector('[data-panel="research"]'),
+      highlightsPanel:    document.querySelector('[data-panel="highlights"]'),
+      notesContainer:     document.getElementById('notes-container'),
+      researchContainer:  document.getElementById('research-container'),
+      highlightsContainer: document.getElementById('highlights-container'),
+      researchStatusBadge: null,
+    };
+
+    // Lazy loading flags
+    let highlightsLoaded = false;
+
+    // ── Tab Switching ──
+    D2.dashboardTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        D2.dashboardTabs.forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+        tab.classList.add('active');
+        tab.setAttribute('aria-selected', 'true');
+
+        // Hide all panels, show the selected one
+        document.querySelectorAll('.content-panel').forEach(p => p.classList.remove('active-panel'));
+        const targetPanel = document.querySelector(`[data-panel="${tab.dataset.tab}"]`);
+        if (targetPanel) targetPanel.classList.add('active-panel');
+
+        // Lazy load notes/research/highlights data
+        if (tab.dataset.tab === 'notes') loadNotes();
+        if (tab.dataset.tab === 'research') loadResearch();
+        if (tab.dataset.tab === 'highlights') loadHighlights();
+      });
+    });
+
+    // ── Load Notes ──
+    let notesLoaded = false;
+
+    async function loadNotes() {
+      if (notesLoaded) return;
+      notesLoaded = true;
+
+      D2.notesGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">💭</div><div class="empty-state-title">Loading notes...</div></div>';
+
+      try {
+        const data = await apiCall('/notes?limit=50');
+        const notes = data.notes || [];
+
+        if (notes.length === 0) {
+          D2.notesGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">📝</div><div class="empty-state-title">No notes yet</div><div class="empty-state-text">Open the extension and capture your first thought!</div></div>';
+          return;
+        }
+
+        D2.notesGrid.innerHTML = notes.map((note, i) => `
+          <div class="note-card ${note.completed ? 'completed' : ''}" style="animation-delay:${Math.min(i*30,300)}ms">
+            <div class="note-content">${escapeHtml(note.content)}</div>
+            ${note.source_title ? `<div class="note-source">📍 ${escapeHtml(note.source_title)}</div>` : ''}
+            <div class="note-footer">
+              <div class="note-meta">🕒 ${formatDate(note.created_at)}${note.remind_at ? ' · ⏰' : ''}</div>
+              <div class="note-meta">${note.completed ? '✅ Done' : '○ Active'}</div>
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        D2.notesGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Failed to load notes</div><div class="empty-state-text">' + escapeHtml(err.message) + '</div></div>';
+      }
+    }
+
+    // ── Load Research ──
+    let researchLoaded = false;
+
+    async function loadResearch() {
+      if (researchLoaded) return;
+      researchLoaded = true;
+
+      D2.researchGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">🧠</div><div class="empty-state-title">Loading research...</div></div>';
+
+      try {
+        const data = await apiCall('/research?limit=50');
+        const research = data.research || [];
+
+        if (research.length === 0) {
+          D2.researchGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">🧠</div><div class="empty-state-title">No research yet</div><div class="empty-state-text">Toggle "Research Later" when bookmarking a page!</div></div>';
+          return;
+        }
+
+        D2.researchGrid.innerHTML = research.map((r, i) => {
+          const statusClass = r.status === 'done' ? 'done' : r.status === 'processing' ? 'processing' : r.status === 'failed' ? 'failed' : 'pending';
+          return `
+            <div class="research-card" style="animation-delay:${Math.min(i*30,300)}ms">
+              <div class="research-title">${escapeHtml(r.title || 'Untitled')}</div>
+              <div class="research-url">${escapeHtml(r.url)}</div>
+              ${r.user_notes ? `<div style="font-size:11px;color:var(--text-400);font-style:italic;margin-bottom:6px;">📝 ${escapeHtml(r.user_notes)}</div>` : ''}
+              ${r.research_result ? `<button class="action-btn toggle-research-btn" style="margin-bottom:6px;">📖 ${D2._researchVisible?.[r.id] ? 'Hide' : 'View'} Analysis</button><div class="research-result ${D2._researchVisible?.[r.id] ? 'visible' : ''}">${r.research_result}</div>` : ''}
+              ${r.status === 'failed' && r.error_message ? `<div style="font-size:11px;color:#f87171;">Error: ${escapeHtml(r.error_message)}</div>` : ''}
+              <div class="research-footer">
+                <span class="research-status-badge ${statusClass}">${r.status}</span>
+                <span class="note-meta">🕒 ${formatDate(r.created_at)}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        // Toggle research results visibility
+        D2._researchVisible = D2._researchVisible || {};
+        D2.researchGrid.querySelectorAll('.toggle-research-btn').forEach((btn, idx) => {
+          btn.addEventListener('click', () => {
+            const card = btn.closest('.research-card');
+            const result = card?.querySelector('.research-result');
+            if (result) {
+              result.classList.toggle('visible');
+              btn.textContent = result.classList.contains('visible') ? '📖 Hide Analysis' : '📖 View Analysis';
+            }
+          });
+        });
+      } catch (err) {
+        D2.researchGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Failed to load research</div><div class="empty-state-text">' + escapeHtml(err.message) + '</div></div>';
+      }
+    }
+
+    // ── Load Highlights ──
+    async function loadHighlights() {
+      if (highlightsLoaded) return;
+      highlightsLoaded = true;
+
+      D2.highlightsGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">🖍</div><div class="empty-state-title">Loading highlights...</div></div>';
+
+      try {
+        const data = await apiCall('/highlights?limit=50');
+        const highlights = data.highlights || [];
+
+        if (highlights.length === 0) {
+          D2.highlightsGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">🖍</div><div class="empty-state-title">No highlights yet</div><div class="empty-state-text">Select text on any page, right-click → Save highlight to easy-rewind!</div></div>';
+          return;
+        }
+
+        const colorMap = { yellow: '#f59e0b', green: '#34d399', blue: '#60a5fa', pink: '#ec4899', purple: '#a78bfa' };
+        const colorNameMap = { yellow: '🟡', green: '🟢', blue: '🔵', pink: '🩷', purple: '🟣' };
+
+        D2.highlightsGrid.innerHTML = highlights.map((h, i) => {
+          const colorHex = colorMap[h.color] || '#a78bfa';
+          return `
+            <div class="highlight-card" style="animation-delay:${Math.min(i*30,300)}ms">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <span class="highlight-color-dot" style="background:${colorHex};"></span>
+                <span class="research-title">${escapeHtml(h.page_title || 'Untitled Page').slice(0, 80)}</span>
+              </div>
+              <div class="highlight-quote">${escapeHtml(h.text)}</div>
+              ${h.note ? `<div style="font-size:11px;color:var(--text-400);margin-top:4px;">💬 ${escapeHtml(h.note)}</div>` : ''}
+              <div class="highlight-source">${escapeHtml(h.url).slice(0, 100)} · ${colorNameMap[h.color] || '🟣'} ${h.color}</div>
+              <div class="research-footer" style="margin-top:6px;">
+                <span class="note-meta">🕒 ${formatDate(h.created_at)}</span>
+                ${h.tags ? `<span class="note-meta">🏷 ${escapeHtml(h.tags)}</span>` : ''}
+                <button class="delete-highlight-btn action-btn" data-id="${h.id}" style="margin-left:auto;color:var(--text-400);">🗑️</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        // Delete handlers
+        D2.highlightsGrid.querySelectorAll('.delete-highlight-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            try {
+              await apiCall(`/highlights/${id}`, { method: 'DELETE' });
+              btn.closest('.highlight-card').remove();
+            } catch (err) {
+              console.warn('[Dashboard] Delete highlight failed:', err);
+            }
+          });
+        });
+      } catch (err) {
+        D2.highlightsGrid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Failed to load highlights</div><div class="empty-state-text">' + escapeHtml(err.message) + '</div></div>';
+      }
+    }
+
+    // ── Update stats to include notes + research + highlights counts ──
+    async function loadStats() {
+      try {
+        const [bookmarksData, notesData, researchData] = await Promise.all([
+          apiCall('/bookmarks?limit=1'),
+          apiCall('/notes?limit=1'),
+          apiCall('/research?limit=1'),
+        ]);
+        // Stats already handled by computeStats for bookmarks
+        // Notes count is shown in the notes badge on the extension
+      } catch {}
+    }
+
+    // ─────────────────────────────────────────────
+    // INIT
+    // ─────────────────────────────────────────────
+    getUserId();
+    checkHealth();
+    loadBookmarks();
+
+    // Refresh health check every 30 seconds
+    setInterval(checkHealth, 30000);
+  </script>
+</body>
+</html>

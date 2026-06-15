@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "brainstorming": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/brainstorming/SKILL.md",
+      "computedHash": "f483c304fcde060211ffae00f49bb728536e7e7613c99db45b5b924d9fc17243"
+    },
+    "code-review": {
+      "source": "cloudflare/cloudflare-docs",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/code-review/SKILL.md",
+      "computedHash": "dfe50c9ec24cfbf1cd9c46a763757ee9745c74ed4ba14c9ba96343da7679969f"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "9e1c8b3103f92fa8092568a44fe64858de7c5c9dc65ce4bea8f168080e889cfd"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "93f53fd1c0352d3d7ec17b8f73d7351bf76f4821e55d123c9d2abc2c53ba48e4"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/react-best-practices/SKILL.md",
+      "computedHash": "ca7b0c0c6e5f2750043f7f0cd72d16ac4e2abc48f9b5500d047a4b77a2506212"
+    }
+  }
+}

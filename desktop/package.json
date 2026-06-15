@@ -1,0 +1,17 @@
+{
+  "name": "easy-rewind-desktop",
+  "version": "2.0.0",
+  "description": "easy-rewind Windows Desktop Companion — system tray app with global shortcut overlay",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --config build.config.json",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  }
+}

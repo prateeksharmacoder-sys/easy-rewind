@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "preCommand": {
+      "prompt": "Check if the command will modify files or consume API credits, and warn me if so."
+    }
+  }
+}

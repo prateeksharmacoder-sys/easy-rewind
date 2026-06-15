@@ -1,0 +1,23 @@
+{
+  "appId": "com.easyrewind.desktop",
+  "productName": "easy-rewind",
+  "directories": {
+    "output": "dist"
+  },
+  "win": {
+    "target": ["nsis", "portable"],
+    "icon": "tray-icon.png",
+    "artifactName": "easy-rewind-Setup-${version}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "runAfterFinish": true,
+    "createDesktopShortcut": true,
+    "shortcutName": "easy-rewind",
+    "installerIcon": "tray-icon.png"
+  },
+  "extraMetadata": {
+    "main": "main.js"
+  }
+}

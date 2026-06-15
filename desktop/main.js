@@ -1,0 +1,321 @@
+/**
+ * easy-rewind Desktop App — Main Process
+ *
+ * Windows system tray app with:
+ * - Global shortcut (Win+Shift+Space / Ctrl+Shift+Space) → overlay window
+ * - System tray icon with context menu
+ * - Desktop notifications for due reminders
+ * - Periodic reminder check (every 2 minutes)
+ * - Quick capture + search without opening browser
+ */
+
+const { app, BrowserWindow, Tray, Menu, Notification, globalShortcut, nativeImage, clipboard, ipcMain } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+
+// ─────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────
+const API_BASE = 'http://localhost:5000/api';
+const REMINDER_CHECK_INTERVAL = 2 * 60 * 1000; // 2 minutes
+const isDev = process.argv.includes('--dev');
+
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let tray = null;
+let overlayWindow = null;
+let reminderInterval = null;
+let userId = null;
+
+// ─────────────────────────────────────────────
+// UTILITY: API Calls
+// ─────────────────────────────────────────────
+function apiCall(path, options = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${API_BASE}${path}`);
+    const httpOptions = {
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname + url.search,
+      method: options.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': userId || 'desktop-user',
+        ...(options.headers || {}),
+      },
+    };
+
+    const req = http.request(httpOptions, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed);
+          else reject(new Error(parsed.error || `HTTP ${res.statusCode}`));
+        } catch {
+          reject(new Error('Invalid response from server'));
+        }
+      });
+    });
+
+    req.on('error', (err) => reject(new Error(`Cannot reach server: ${err.message}`)));
+
+    if (options.body) {
+      req.write(JSON.stringify(options.body));
+    }
+    req.end();
+  });
+}
+
+// ─────────────────────────────────────────────
+// CREATE OVERLAY WINDOW
+// ─────────────────────────────────────────────
+function createOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.show();
+    overlayWindow.focus();
+    return;
+  }
+
+  overlayWindow = new BrowserWindow({
+    width: 420,
+    height: 580,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#0f0f1a',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
+
+  // Show with fade-in
+  overlayWindow.once('ready-to-show', () => {
+    overlayWindow.show();
+    overlayWindow.focus();
+  });
+
+  // Hide on blur (click outside)
+  overlayWindow.on('blur', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.hide();
+    }
+  });
+
+  // Handle IPC from renderer
+  ipcMain.on('hide-overlay', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.hide();
+    }
+  });
+
+  ipcMain.on('open-in-browser', (event, url) => {
+    if (url) require('electron').shell.openExternal(url);
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.hide();
+    }
+  });
+
+  ipcMain.handle('api-call', async (event, { path, method, body }) => {
+    try {
+      return await apiCall(path, { method, body });
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// TOGGLE OVERLAY
+// ─────────────────────────────────────────────
+function toggleOverlay() {
+  if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+    overlayWindow.hide();
+  } else {
+    createOverlayWindow();
+  }
+}
+
+// ─────────────────────────────────────────────
+// CHECK REMINDERS
+// ─────────────────────────────────────────────
+async function checkReminders() {
+  try {
+    const data = await apiCall('/reminders?due=true&limit=5');
+    if (data.reminders && data.reminders.length > 0) {
+      for (const reminder of data.reminders) {
+        showDesktopNotification(reminder.title || 'Reminder', reminder.message || '', reminder);
+        // Acknowledge
+        await apiCall(`/reminders/${reminder.id}`, {
+          method: 'PATCH',
+          body: { reminded: true },
+        });
+      }
+    }
+  } catch (err) {
+    // Silently fail — server might be offline
+  }
+}
+
+// ─────────────────────────────────────────────
+// DESKTOP NOTIFICATION
+// ─────────────────────────────────────────────
+function showDesktopNotification(title, body, data = {}) {
+  const notification = new Notification({
+    title: `⏪ ${title}`,
+    body: body || 'You have a pending reminder in easy-rewind.',
+    icon: path.join(__dirname, 'tray-icon.png'),
+    silent: false,
+    hasReply: false,
+  });
+
+  notification.on('click', () => {
+    // Open the overlay when notification is clicked
+    createOverlayWindow();
+  });
+
+  notification.show();
+}
+
+// ─────────────────────────────────────────────
+// CREATE SYSTEM TRAY
+// ─────────────────────────────────────────────
+function createTray() {
+  // Create a simple 16x16 tray icon from a nativeImage
+  // We'll generate a small purple dot as fallback
+  const iconSize = 16;
+  const canvas = nativeImage.createEmpty();
+  // Use a generated PNG icon
+  let trayIcon;
+
+  try {
+    trayIcon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.svg'));
+    if (trayIcon.isEmpty()) throw new Error('No icon file');
+  } catch {
+    // Create a minimal programmatic icon (16x16 purple square)
+    const size = 16;
+    const buf = Buffer.alloc(size * size * 4);
+    for (let i = 0; i < size * size; i++) {
+      const offset = i * 4;
+      buf[offset] = 124;     // R
+      buf[offset + 1] = 58;  // G
+      buf[offset + 2] = 237; // B
+      buf[offset + 3] = 255; // A
+    }
+    trayIcon = nativeImage.createFromBuffer(buf, { width: size, height: size });
+  }
+
+  tray = new Tray(trayIcon);
+  tray.setToolTip('easy-rewind — Press Ctrl+Shift+Space to open');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '🔍 Quick Search & Capture',
+      click: () => createOverlayWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: '📊 Open Dashboard',
+      click: () => require('electron').shell.openExternal('http://localhost:5000/dashboard'),
+    },
+    { type: 'separator' },
+    {
+      label: 'Check Reminders Now',
+      click: () => checkReminders(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit easy-rewind',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+
+  // Double-click tray → open overlay
+  tray.on('double-click', () => {
+    createOverlayWindow();
+  });
+}
+
+// ─────────────────────────────────────────────
+// APP LIFECYCLE
+// ─────────────────────────────────────────────
+app.whenReady().then(() => {
+  // Register global shortcut
+  const shortcut = globalShortcut.register('Ctrl+Shift+Space', () => {
+    toggleOverlay();
+  });
+
+  if (!shortcut) {
+    console.warn('Global shortcut registration failed (may conflict with another app)');
+  }
+
+  // Also register Alt+Space as alternative
+  globalShortcut.register('Alt+Shift+E', () => {
+    toggleOverlay();
+  });
+
+  // Create tray
+  createTray();
+
+  // Start reminder polling
+  reminderInterval = setInterval(checkReminders, REMINDER_CHECK_INTERVAL);
+  // Initial check after 5 seconds
+  setTimeout(checkReminders, 5000);
+
+  // Get or create user ID (simple JSON store — avoids electron-store ESM issues)
+  const storePath = path.join(app.getPath('userData'), 'config.json');
+  let config = {};
+  try {
+    const raw = fs.readFileSync(storePath, 'utf8');
+    config = JSON.parse(raw);
+  } catch { /* first run — empty config */ }
+  userId = config.easy_rewind_user_id;
+  if (!userId) {
+    userId = 'desktop_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    config.easy_rewind_user_id = userId;
+    try {
+      const dir = path.dirname(storePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify(config, null, 2));
+    } catch (err) {
+      console.warn('[Store] Could not save config:', err.message);
+    }
+  }
+
+  console.log('✅ easy-rewind Desktop App running');
+  console.log(`   User ID: ${userId.slice(0, 20)}...`);
+  console.log('   Shortcut: Ctrl+Shift+Space to open overlay');
+
+  // Auto-open overlay on first launch
+  if (isDev) {
+    setTimeout(createOverlayWindow, 1000);
+  }
+});
+
+app.on('window-all-closed', () => {
+  // Don't quit — we're a tray app
+});
+
+app.on('before-quit', () => {
+  app.isQuitting = true;
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  if (reminderInterval) clearInterval(reminderInterval);
+});

@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "easy-rewind — Knowledge Assistant",
+  "version": "2.0.0",
+  "description": "Instant AI definitions, smart bookmarks, quick notes, research later, and reminders — all without leaving your page.",
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "easy-rewind (Ctrl+Shift+E)",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "contextMenus",
+    "notifications",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "http://localhost:*/*",
+    "https://*/*"
+  ],
+
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "Open easy-rewind popup"
+    },
+    "quick-capture-note": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+N",
+        "mac": "Command+Shift+N"
+      },
+      "description": "Quick capture a note/thought"
+    }
+  }
+}
