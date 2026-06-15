@@ -750,6 +750,162 @@
       color: #f87171;
     }
 
+    /* ── Collapsible Sections ── */
+    .collapsible-section.collapsed .collapsible-content {
+      display: none;
+    }
+    .collapsible-section.collapsed [onclick]::after {
+      content: ' ▶';
+      font-size: 10px;
+      color: var(--text-400);
+    }
+    .collapsible-section:not(.collapsed) [onclick]::after {
+      content: ' ▼';
+      font-size: 10px;
+      color: var(--text-400);
+    }
+    .settings-select {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-sm);
+      color: var(--text-100);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .settings-select:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    /* ── Digest Card ── */
+    .digest-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      margin-bottom: 14px;
+      transition: var(--transition);
+      box-shadow: var(--shadow-card);
+      animation: cardEnter 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    .digest-card:hover {
+      border-color: var(--glass-border-md);
+    }
+    .digest-card .digest-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+    }
+    .digest-card .digest-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-100);
+    }
+    .digest-card .digest-date {
+      font-size: 11px;
+      color: var(--text-400);
+    }
+    .digest-card .digest-summary {
+      font-size: 13px;
+      color: var(--text-300);
+      line-height: 1.6;
+      margin: 10px 0;
+    }
+    .digest-card .digest-stats {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin: 10px 0 8px;
+    }
+    .digest-card .digest-stat {
+      font-size: 12px;
+      color: var(--text-400);
+    }
+    .digest-card .digest-stat strong {
+      color: var(--text-200);
+    }
+    .digest-card .digest-topics {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin: 8px 0;
+    }
+    .digest-card .digest-topic-tag {
+      font-size: 11px;
+      padding: 2px 8px;
+      background: rgba(167,139,250,0.1);
+      border: 1px solid rgba(167,139,250,0.2);
+      border-radius: 12px;
+      color: var(--accent);
+    }
+    .digest-card .digest-items {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .digest-card .digest-item {
+      font-size: 12px;
+      color: var(--text-300);
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.03);
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      display: block;
+      transition: var(--transition);
+    }
+    .digest-card .digest-item:hover {
+      background: rgba(255,255,255,0.06);
+      color: var(--accent);
+    }
+    .digest-card .digest-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .digest-card .digest-actions button {
+      font-size: 11px;
+      padding: 4px 12px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-sm);
+      color: var(--text-300);
+      cursor: pointer;
+      transition: var(--transition);
+    }
+    .digest-card .digest-actions button:hover {
+      background: rgba(255,255,255,0.1);
+      color: var(--text-100);
+    }
+    .digest-card .digest-body {
+      display: none;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--glass-border);
+    }
+    .digest-card.expanded .digest-body {
+      display: block;
+    }
+    .digest-card .digest-sent-badge {
+      font-size: 10px;
+      padding: 1px 8px;
+      background: rgba(74,222,128,0.1);
+      border: 1px solid rgba(74,222,128,0.2);
+      border-radius: 10px;
+      color: #4ade80;
+    }
+    .digest-card .digest-unsent-badge {
+      font-size: 10px;
+      padding: 1px 8px;
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.2);
+      border-radius: 10px;
+      color: #fbbf24;
+    }
+
     /* ── Bookmark Row (List view) ── */
     .bookmark-row {
       background: var(--bg-card);
@@ -1398,6 +1554,7 @@
       <button class="dashboard-tab" data-tab="research" role="tab" aria-selected="false">🧠 Research</button>
       <button class="dashboard-tab" data-tab="highlights" role="tab" aria-selected="false">🖍 Highlights</button>
       <button class="dashboard-tab" data-tab="knowledge-graph" role="tab" aria-selected="false">🕸️ Knowledge Graph</button>
+      <button class="dashboard-tab" data-tab="digest" role="tab" aria-selected="false">📬 Digest</button>
     </div>
 
     <!-- Bookmarks tab -->
@@ -1466,6 +1623,111 @@
             <div id="kg-node-url" style="font-size:11px;color:var(--text-400);margin-bottom:8px;word-break:break-all;"></div>
             <div id="kg-node-connections" style="font-size:12px;color:var(--text-300);"></div>
           </div>
+        </div>
+
+        <!-- Connections Manager -->
+        <div style="flex:1;min-width:240px;margin-top:12px;">
+          <div class="collapsible-section" id="connections-manager" style="background:var(--bg-card);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:16px;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-200);cursor:pointer;" onclick="this.parentElement.classList.toggle('collapsed')">
+              🔗 Connections Manager <span style="font-size:10px;color:var(--text-400);">(click to toggle)</span>
+            </div>
+            <div class="collapsible-content">
+              <div style="margin-bottom:8px;">
+                <label style="font-size:11px;color:var(--text-400);display:block;margin-bottom:2px;">Source Item</label>
+                <select id="conn-source" class="settings-select" style="width:100%;padding:6px 8px;font-size:12px;">
+                  <option value="">— Select —</option>
+                </select>
+              </div>
+              <div style="margin-bottom:8px;">
+                <label style="font-size:11px;color:var(--text-400);display:block;margin-bottom:2px;">Target Item</label>
+                <select id="conn-target" class="settings-select" style="width:100%;padding:6px 8px;font-size:12px;">
+                  <option value="">— Select —</option>
+                </select>
+              </div>
+              <div style="margin-bottom:8px;">
+                <label style="font-size:11px;color:var(--text-400);display:block;margin-bottom:2px;">Relationship</label>
+                <select id="conn-relationship" class="settings-select" style="width:100%;padding:6px 8px;font-size:12px;">
+                  <option value="related">Related</option>
+                  <option value="prerequisite">Prerequisite</option>
+                  <option value="extension">Extension</option>
+                  <option value="contrast">Contrast</option>
+                  <option value="application">Application</option>
+                  <option value="part_of">Part Of</option>
+                  <option value="example">Example</option>
+                  <option value="reference">Reference</option>
+                </select>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button class="action-btn" id="conn-create-btn" style="flex:1;padding:6px 12px;font-size:12px;">➕ Connect</button>
+                <button class="action-btn" id="conn-refresh-btn" style="padding:6px 12px;font-size:12px;">🔄</button>
+              </div>
+              <div id="conn-status" style="font-size:11px;color:var(--text-400);margin-top:6px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Digest tab -->
+    <main id="digest-container" class="bookmarks-container content-panel" aria-label="Digest" data-panel="digest" style="display:none;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+        <h2 style="font-size:18px;font-weight:700;margin:0;flex:1;">📬 Weekly Digest</h2>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-400);cursor:pointer;">
+          <input type="checkbox" id="digest-enabled" checked /> Auto-generate weekly
+        </label>
+        <button class="action-btn" id="digest-generate-btn" style="padding:8px 18px;font-size:13px;">⚡ Generate Now</button>
+        <button class="action-btn" id="digest-settings-btn" style="padding:8px 18px;font-size:13px;">⚙️ Settings</button>
+      </div>
+
+      <!-- Digest Settings Panel (collapsible) -->
+      <div id="digest-settings-panel" style="display:none;background:var(--bg-card);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:16px;margin-bottom:20px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-200);">Digest Settings</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">
+          <div>
+            <label style="color:var(--text-400);display:block;margin-bottom:2px;">Frequency</label>
+            <select id="digest-freq" class="settings-select" style="width:100%;padding:6px 8px;">
+              <option value="daily">Daily</option>
+              <option value="weekly" selected>Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div>
+            <label style="color:var(--text-400);display:block;margin-bottom:2px;">Day of Week</label>
+            <select id="digest-day" class="settings-select" style="width:100%;padding:6px 8px;">
+              <option value="0">Sunday</option>
+              <option value="1">Monday</option>
+              <option value="2">Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+            </select>
+          </div>
+          <div>
+            <label style="color:var(--text-400);display:block;margin-bottom:2px;">Include in digest:</label>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="digest-inc-bookmarks" checked /> Bookmarks</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="digest-inc-notes" checked /> Notes</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="digest-inc-highlights" checked /> Highlights</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="digest-inc-flashcards" checked /> Flashcards</label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="digest-inc-quiz" checked /> Quiz Stats</label>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-400);cursor:pointer;">
+              <input type="checkbox" id="digest-ai-summary" checked /> Include AI summary
+            </label>
+            <button class="action-btn" id="digest-save-settings" style="padding:6px 12px;font-size:12px;align-self:flex-start;">💾 Save Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Digest List -->
+      <div id="digest-list">
+        <div class="empty-state" id="digest-empty">
+          <div class="empty-state-icon">📬</div>
+          <div class="empty-state-title">No digests yet</div>
+          <div class="empty-state-text">Click "Generate Now" to create your first weekly digest.</div>
         </div>
       </div>
     </main>
@@ -2180,7 +2442,11 @@
         if (tab.dataset.tab === 'notes') loadNotes();
         if (tab.dataset.tab === 'research') loadResearch();
         if (tab.dataset.tab === 'highlights') loadHighlights();
-        if (tab.dataset.tab === 'knowledge-graph') loadKnowledgeGraph();
+        if (tab.dataset.tab === 'knowledge-graph') {
+          loadKnowledgeGraph();
+          populateConnectionsManager();
+        }
+        if (tab.dataset.tab === 'digest') loadDigests();
       });
     });
 
@@ -2642,6 +2908,187 @@
       } finally {
         btn.disabled = false;
         btn.textContent = '🔍 Auto-Discover Connections';
+      }
+    });
+
+    });
+
+    // ── Connections Manager ──
+    async function populateConnectionsManager() {
+      const sourceSel = document.getElementById('conn-source');
+      const targetSel = document.getElementById('conn-target');
+      if (!sourceSel) return;
+      try {
+        const data = await apiCall('/items?limit=200');
+        const items = data.items || [];
+        const opts = items.map(i => `<option value="${i.id}">${escapeHtml(i.title || 'Untitled').slice(0, 40)}</option>`).join('');
+        sourceSel.innerHTML = '<option value="">— Source Item —</option>' + opts;
+        targetSel.innerHTML = '<option value="">— Target Item —</option>' + opts;
+      } catch (_) {
+        sourceSel.innerHTML = '<option value="">— Failed to load —</option>';
+      }
+    }
+
+    document.getElementById('conn-create-btn')?.addEventListener('click', async () => {
+      const source = document.getElementById('conn-source').value;
+      const target = document.getElementById('conn-target').value;
+      const rel = document.getElementById('conn-relationship').value;
+      const status = document.getElementById('conn-status');
+      if (!source || !target) { status.textContent = '⚠️ Please select both source and target.'; return; }
+      if (source === target) { status.textContent = '⚠️ Cannot connect an item to itself.'; return; }
+      try {
+        await apiCall(`/items/${source}/connect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_id: parseInt(target), relationship: rel, confidence: 0.8 }),
+        });
+        status.textContent = '✅ Connection created!';
+        kgLoaded = false;
+        loadKnowledgeGraph();
+      } catch (err) {
+        status.textContent = '❌ Failed: ' + err.message;
+      }
+    });
+
+    document.getElementById('conn-refresh-btn')?.addEventListener('click', () => {
+      populateConnectionsManager();
+      document.getElementById('conn-status').textContent = '🔄 Refreshed item list.';
+    });
+
+    // ── Digest Tab ──
+    let digestLoaded = false;
+    let digestSettingsVisible = false;
+
+    async function loadDigests() {
+      if (digestLoaded) return;
+      digestLoaded = true;
+      const list = document.getElementById('digest-list');
+      const empty = document.getElementById('digest-empty');
+      try {
+        const data = await apiCall('/digest?limit=20');
+        const digests = data.digests || [];
+        if (digests.length === 0) {
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+        list.innerHTML = digests.map((d, i) => {
+          const isSent = !!d.sent_at;
+          return `
+            <div class="digest-card" data-id="${d.id}">
+              <div class="digest-header" onclick="this.closest('.digest-card').classList.toggle('expanded')">
+                <div>
+                  <div class="digest-title">${escapeHtml(d.title)}</div>
+                  <div class="digest-date">${formatDate(d.created_at)}</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  ${isSent ? '<span class="digest-sent-badge">✉️ Sent</span>' : '<span class="digest-unsent-badge">📬 Not sent</span>'}
+                  <span style="font-size:10px;color:var(--text-400);">${d.bookmark_count + d.note_count + d.highlight_count + d.flashcard_count} items</span>
+                </div>
+              </div>
+              <div class="digest-body">
+                <div class="digest-summary">${escapeHtml(d.summary || 'No summary available.')}</div>
+                <div class="digest-stats">
+                  <span class="digest-stat">📑 <strong>${d.bookmark_count}</strong> bookmarks</span>
+                  <span class="digest-stat">📝 <strong>${d.note_count}</strong> notes</span>
+                  <span class="digest-stat">🖍 <strong>${d.highlight_count}</strong> highlights</span>
+                  <span class="digest-stat">🃏 <strong>${d.flashcard_count}</strong> flashcards</span>
+                  ${d.quiz_accuracy > 0 ? `<span class="digest-stat">🎯 <strong>${d.quiz_accuracy}%</strong> quiz accuracy</span>` : ''}
+                </div>
+                <div class="digest-actions">
+                  ${!isSent ? `<button onclick="sendDigest(${d.id})">✉️ Send Email</button>` : ''}
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        list.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Failed to load digests</div><div class="empty-state-text">${escapeHtml(err.message)}</div></div>`;
+      }
+    }
+
+    async function sendDigest(id) {
+      const card = document.querySelector(`.digest-card[data-id="${id}"]`);
+      const actionsDiv = card?.querySelector('.digest-actions');
+      if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:11px;color:var(--text-400);">Sending...</span>';
+      try {
+        const result = await apiCall(`/digest/${id}/send`, { method: 'POST' });
+        if (actionsDiv) {
+          if (result.success) {
+            actionsDiv.innerHTML = '<span style="font-size:11px;color:#4ade80;">✅ Sent!</span>';
+            const badge = card?.querySelector('.digest-unsent-badge');
+            if (badge) { badge.textContent = '✉️ Sent'; badge.className = 'digest-sent-badge'; }
+          } else if (result.configurable) {
+            actionsDiv.innerHTML = `<span style="font-size:11px;color:var(--text-400);">⚠️ ${escapeHtml(result.message || 'Not configured')}</span>`;
+          } else {
+            actionsDiv.innerHTML = `<span style="font-size:11px;color:#f87171;">❌ ${escapeHtml(result.error || 'Failed')}</span>`;
+          }
+        }
+      } catch (err) {
+        if (actionsDiv) actionsDiv.innerHTML = `<span style="font-size:11px;color:#f87171;">❌ ${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    document.getElementById('digest-generate-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('digest-generate-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Generating...';
+      try {
+        await apiCall('/digest/generate', { method: 'POST' });
+        digestLoaded = false;
+        loadDigests();
+        showToast('Digest generated!', 'success');
+      } catch (err) {
+        showToast('Failed to generate digest: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ Generate Now';
+      }
+    });
+
+    document.getElementById('digest-settings-btn')?.addEventListener('click', async () => {
+      const panel = document.getElementById('digest-settings-panel');
+      digestSettingsVisible = !digestSettingsVisible;
+      panel.style.display = digestSettingsVisible ? 'block' : 'none';
+      if (digestSettingsVisible) {
+        try {
+          const data = await apiCall('/digest/settings');
+          const s = data.settings || {};
+          document.getElementById('digest-enabled').checked = s.enabled !== false;
+          document.getElementById('digest-freq').value = s.frequency || 'weekly';
+          document.getElementById('digest-day').value = s.day_of_week || 0;
+          document.getElementById('digest-inc-bookmarks').checked = s.include_bookmarks !== false;
+          document.getElementById('digest-inc-notes').checked = s.include_notes !== false;
+          document.getElementById('digest-inc-highlights').checked = s.include_highlights !== false;
+          document.getElementById('digest-inc-flashcards').checked = s.include_flashcards !== false;
+          document.getElementById('digest-inc-quiz').checked = s.include_quiz !== false;
+          document.getElementById('digest-ai-summary').checked = s.include_ai_summary !== false;
+        } catch (_) {}
+      }
+    });
+
+    document.getElementById('digest-save-settings')?.addEventListener('click', async () => {
+      try {
+        await apiCall('/digest/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: document.getElementById('digest-enabled').checked,
+            frequency: document.getElementById('digest-freq').value,
+            day_of_week: parseInt(document.getElementById('digest-day').value),
+            include_bookmarks: document.getElementById('digest-inc-bookmarks').checked,
+            include_notes: document.getElementById('digest-inc-notes').checked,
+            include_highlights: document.getElementById('digest-inc-highlights').checked,
+            include_flashcards: document.getElementById('digest-inc-flashcards').checked,
+            include_quiz: document.getElementById('digest-inc-quiz').checked,
+            include_ai_summary: document.getElementById('digest-ai-summary').checked,
+          }),
+        });
+        showToast('Digest settings saved!', 'success');
+        digestSettingsVisible = false;
+        document.getElementById('digest-settings-panel').style.display = 'none';
+      } catch (err) {
+        showToast('Failed to save settings: ' + err.message, 'error');
       }
     });
 

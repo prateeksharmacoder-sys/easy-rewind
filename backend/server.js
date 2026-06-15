@@ -54,19 +54,34 @@ app.use(cors(corsOptions));
 // ─────────────────────────────────────────────
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,                   // max 200 requests per window
+  max: 200, // max 200 requests per window
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please wait a few minutes and try again.' },
 });
 
 const aiLimiter = rateLimit({
-  windowMs: 60 * 1000,  // 1 minute
-  max: 10,              // max 10 AI lookups per minute (cached responses bypass this)
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // max 10 AI lookups per minute (cached responses bypass this)
   message: { error: 'Too many AI lookups. Please wait a moment.' },
 });
 
 app.use(generalLimiter);
+
+// ─────────────────────────────────────────────
+// Security Headers (CSP, XSS, etc.)
+// ─────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' http://localhost:*"
+  );
+  next();
+});
 
 // ─────────────────────────────────────────────
 // Body Parsing Middleware
@@ -162,14 +177,73 @@ app.listen(PORT, () => {
   }
 
   // Auto-check reminders every 2 minutes (built-in, no extension needed)
-  setInterval(async () => {
-    try {
-      await axios.post(`http://localhost:${PORT}/api/check-reminders`, {}, {
-        headers: { 'Content-Type': 'application/json', 'x-user-id': 'system' },
-      });
-    } catch (_) { /* silent — server self-check is best-effort */ }
-  }, 2 * 60 * 1000);
+  setInterval(
+    async () => {
+      try {
+        await axios.post(
+          `http://localhost:${PORT}/api/check-reminders`,
+          {},
+          {
+            headers: { 'Content-Type': 'application/json', 'x-user-id': 'system' },
+          }
+        );
+      } catch (_) {
+        /* silent — server self-check is best-effort */
+      }
+    },
+    2 * 60 * 1000
+  );
   console.log('[Reminders] Auto-check every 2 minutes enabled\n');
+
+  // Weekly digest auto-generation — checks every hour if a digest is due
+  setInterval(
+    async () => {
+      try {
+        const { config, loadSettings } = require('./routes/helpers');
+        loadSettings();
+        const prefs = config.digestPrefs || {};
+        if (!prefs.enabled) return;
+
+        // Check if a digest is due (once per week on the configured day+hour)
+        const now = new Date();
+        const currentDay = now.getDay();
+        const currentHour = now.getHours();
+        const targetDay = prefs.day_of_week ?? 0;
+        const targetHour = prefs.hour ?? 9;
+
+        if (currentDay !== targetDay || currentHour !== targetHour) return;
+
+        // Only generate if no digest was generated today
+        const today = now.toISOString().slice(0, 10);
+        if (prefs.last_digest_at && prefs.last_digest_at.startsWith(today)) return;
+
+        // Also check that we're not too early in the hour (wait 5 min for clock jitter)
+        if (now.getMinutes() > 15) return;
+
+        await axios.post(
+          `http://localhost:${PORT}/api/digest/generate`,
+          {},
+          {
+            headers: { 'Content-Type': 'application/json', 'x-user-id': 'system' },
+          }
+        );
+
+        // Update last_digest_at
+        prefs.last_digest_at = now.toISOString();
+        config.digestPrefs = prefs;
+        try {
+          const { saveSettings } = require('./routes/helpers');
+          saveSettings();
+        } catch (_) {}
+
+        console.log(`[Digest] Auto-generated weekly digest at ${now.toISOString()}`);
+      } catch (_) {
+        /* silent — best-effort */
+      }
+    },
+    60 * 60 * 1000
+  ); // Check once per hour
+  console.log('[Digest] Weekly auto-digest enabled (hourly check)\n');
 });
 
 module.exports = app;

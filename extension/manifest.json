@@ -44,8 +44,7 @@
   ],
 
   "host_permissions": [
-    "http://localhost:*/*",
-    "https://*/*"
+    "http://localhost:*/*"
   ],
 
   "omnibox": {
