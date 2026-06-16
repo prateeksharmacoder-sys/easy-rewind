@@ -3,947 +3,615 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>easy-rewind — Knowledge Assistant</title>
+  <title>easy-rewind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
   <style>
-    /* ══════════════════════════════════════
-       DESIGN SYSTEM — Modern Glass Edition
-    ══════════════════════════════════════ */
+    /* ══════════════════════════════════════════════
+       DESIGN SYSTEM — Zinc Pro (matches dashboard)
+    ══════════════════════════════════════════════ */
     :root {
-      /* Shared easy-rewind design tokens */
-      --er-bg: #07070f;
-      --er-surface: rgba(18, 18, 40, 0.85);
-      --er-card: rgba(28, 28, 56, 0.75);
-      --er-input: rgba(42, 42, 78, 0.6);
-      --er-primary: #8b5cf6;
-      --er-primary-strong: #7c3aed;
-      --er-text: #f1f0ff;
-      --er-text-secondary: #b8b4d8;
-      --er-text-muted: #6b6890;
-      --er-border: rgba(139, 92, 246, 0.15);
-      --er-border-focus: rgba(167, 139, 250, 0.6);
-      --er-accent-green: #34d399;
-      --er-accent-amber: #f59e0b;
-      --er-accent-red: #ef4444;
-      --er-accent-pink: #ec4899;
-      --er-radius-sm: 10px;
-      --er-radius-md: 14px;
-      --er-radius-lg: 18px;
-      --er-shadow: 0 4px 24px rgba(0,0,0,0.3);
-      --er-glow: 0 0 24px rgba(124, 58, 237, 0.25);
+      --bg-base: #09090b;
+      --bg-surface: #0c0c10;
+      --bg-card: #111115;
+      --bg-card-hover: #16161a;
+      --bg-elevated: #1c1c22;
+      --bg-input: #141418;
+      --bg-overlay: rgba(0,0,0,0.65);
+      --bg-tooltip: #1c1c22;
 
-      --bg-deep: #07070f;
-      --bg-surface: rgba(18, 18, 40, 0.85);
-      --bg-card: rgba(28, 28, 56, 0.75);
-      --bg-card-hover: rgba(36, 36, 68, 0.85);
-      --bg-input: rgba(42, 42, 78, 0.6);
-      --bg-elevated: rgba(52, 52, 96, 0.5);
+      --border-subtle: rgba(255,255,255,0.04);
+      --border-default: rgba(255,255,255,0.07);
+      --border-hover: rgba(255,255,255,0.10);
+      --border-focus: rgba(59,130,246,0.45);
 
-      --glass-border: rgba(139, 92, 246, 0.15);
-      --glass-border-hover: rgba(139, 92, 246, 0.35);
-      --glass-border-focus: rgba(167, 139, 250, 0.6);
-      --glass-highlight: rgba(255, 255, 255, 0.04);
+      --text-primary: #e8e8ea;
+      --text-secondary: #a0a0ab;
+      --text-muted: #6b6b78;
+      --text-disabled: #4a4a56;
 
-      --accent-400: #a78bfa;
-      --accent-500: #8b5cf6;
-      --accent-600: #7c3aed;
-      --accent-pink: #ec4899;
-      --accent-green: #34d399;
-      --accent-amber: #f59e0b;
-      --accent-red: #ef4444;
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --accent-soft: rgba(59,130,246,0.10);
+      --accent-border: rgba(59,130,246,0.20);
 
-      --gradient-main: linear-gradient(135deg, #7c3aed 0%, #6366f1 50%, #ec4899 100%);
-      --gradient-text: linear-gradient(135deg, #a78bfa 0%, #818cf8 50%, #f472b6 100%);
+      --gradient-primary: linear-gradient(135deg, #3b82f6, #2563eb);
+      --gradient-text: linear-gradient(135deg, #60a5fa, #3b82f6);
 
-      --text-primary: #f1f0ff;
-      --text-secondary: #b8b4d8;
-      --text-muted: #6b6890;
+      --green: #22c55e;
+      --green-soft: rgba(34,197,94,0.10);
+      --amber: #eab308;
+      --amber-soft: rgba(234,179,8,0.10);
+      --red: #ef4444;
+      --red-soft: rgba(239,68,68,0.10);
+      --blue: #3b82f6;
+      --blue-soft: rgba(59,130,246,0.10);
 
-      --shadow-card: 0 4px 24px rgba(0,0,0,0.3), inset 0 1px 0 var(--glass-highlight);
-      --shadow-elevated: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
-      --glow: 0 0 24px rgba(124, 58, 237, 0.25);
+      --radius-xs: 6px;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
 
-      --radius-sm: 10px;
-      --radius-md: 14px;
-      --radius-lg: 18px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+      --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
 
-      --transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+      --transition: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-track{background:transparent;}
+    ::-webkit-scrollbar-thumb{background:rgba(59,130,246,0.2);border-radius:2px;}
 
-    body {
-      width: 420px;
-      min-height: 540px;
-      max-height: 600px;
-      background: var(--bg-deep);
-      color: var(--text-primary);
-      font-family: 'Inter', -apple-system, sans-serif;
-      font-size: 13px;
-      line-height: 1.5;
-      overflow-x: hidden;
+    body{
+      width:420px;min-height:480px;max-height:600px;
+      background:var(--bg-base);
+      color:var(--text-primary);
+      font-family:var(--font);font-size:13px;line-height:1.5;
+      overflow-x:hidden;
+      display:flex;flex-direction:column;
     }
+
+    /* ── Icons base ── */
+    .icon{width:16px;height:16px;display:inline-block;vertical-align:middle;flex-shrink:0;color:currentColor;}
+    .icon-sm{width:14px;height:14px;}
+    .icon-lg{width:20px;height:20px;}
 
     /* ═══════════ HEADER ═══════════ */
-    .header {
-      background: linear-gradient(135deg, #2a1050 0%, #1a1040 40%, #0f0f2a 100%);
-      padding: 14px 18px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      position: relative;
-      overflow: hidden;
-      border-bottom: 1px solid var(--glass-border);
+    .header{
+      padding:12px 14px;display:flex;align-items:center;justify-content:space-between;
+      border-bottom:1px solid var(--border-subtle);
+      background:var(--bg-surface);
     }
-    .header::before {
-      content: '';
-      position: absolute;
-      top: -50%;
-      right: -20%;
-      width: 200px;
-      height: 200px;
-      background: radial-gradient(circle, rgba(124,58,237,0.15), transparent 70%);
-      pointer-events: none;
+    .header-left{display:flex;align-items:center;gap:10px;}
+    .logo-wrap{
+      width:30px;height:30px;border-radius:8px;
+      background:var(--gradient-primary);
+      display:flex;align-items:center;justify-content:center;
+      box-shadow:0 2px 10px rgba(59,130,246,0.2);
+      position:relative;overflow:hidden;
     }
-    .header::after {
-      content: '';
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: var(--gradient-main);
-      opacity: 0.3;
+    .logo-wrap .icon{width:16px;height:16px;color:#fff;position:relative;z-index:1;}
+    .logo-wrap::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,0.12),transparent 60%);}
+    .header-title{font-size:14px;font-weight:700;letter-spacing:-0.2px;}
+    .header-title span{background:var(--gradient-text);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+    .header-actions{display:flex;gap:4px;}
+    .icon-btn{
+      width:30px;height:30px;border-radius:var(--radius-xs);
+      background:transparent;border:1px solid var(--border-subtle);
+      color:var(--text-muted);cursor:pointer;
+      display:flex;align-items:center;justify-content:center;
+      transition:var(--transition);
     }
-    .header-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      position: relative;
-      z-index: 1;
-    }
-    .logo-icon {
-      width: 34px;
-      height: 34px;
-      background: rgba(255,255,255,0.08);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 17px;
-    }
-    .header-title { font-size: 16px; font-weight: 700; color: white; letter-spacing: -0.4px; }
-    .header-subtitle { font-size: 10px; color: rgba(167, 139, 250, 0.7); font-weight: 500; }
-    .header-actions { display: flex; gap: 6px; position: relative; z-index: 1; }
-    .icon-btn {
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.7);
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: var(--transition);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(4px);
-    }
-    .icon-btn:hover { background: rgba(255,255,255,0.12); color: white; transform: translateY(-1px); border-color: rgba(255,255,255,0.2); }
+    .icon-btn:hover{border-color:var(--border-default);color:var(--text-secondary);background:var(--bg-card);}
+    .icon-btn .icon{width:15px;height:15px;}
 
     /* ═══════════ API KEY BAR ═══════════ */
-    .api-key-bar {
-      background: rgba(10, 10, 24, 0.9);
-      border-bottom: 1px solid var(--glass-border);
-      padding: 6px 14px;
-      cursor: pointer;
-      transition: var(--transition);
+    .api-bar{
+      display:flex;align-items:center;gap:8px;
+      padding:6px 14px;background:var(--bg-surface);
+      border-bottom:1px solid var(--border-subtle);
+      cursor:pointer;transition:var(--transition);font-size:11px;
     }
-    .api-key-bar:hover { background: rgba(16, 16, 36, 0.95); }
-    .api-key-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 11px;
+    .api-bar:hover{background:rgba(12,12,20,0.6);}
+    .api-dot{
+      width:6px;height:6px;border-radius:50%;
+      transition:var(--transition);flex-shrink:0;
     }
-    .api-key-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      transition: var(--transition);
+    .api-dot.ok{background:var(--green);box-shadow:0 0 6px rgba(34,197,94,0.35);}
+    .api-dot.missing{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,0.3);}
+    .api-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;}
+    .api-status{color:var(--text-muted);font-size:10px;flex:1;}
+    .api-edit-btn{
+      background:none;border:none;color:var(--text-muted);cursor:pointer;
+      padding:2px;border-radius:4px;display:flex;transition:var(--transition);
     }
-    .api-key-dot.configured { background: var(--accent-green); box-shadow: 0 0 6px rgba(52,211,153,0.5); }
-    .api-key-dot.missing { background: var(--accent-red); box-shadow: 0 0 6px rgba(239,68,68,0.4); }
-    .api-key-label { font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; font-size: 10px; }
-    .api-key-status-text { color: var(--text-muted); font-size: 10px; flex: 1; }
-    .api-key-toggle-btn {
-      background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px;
-      padding: 2px 6px; border-radius: 4px; transition: var(--transition); line-height: 1;
+    .api-edit-btn:hover{color:var(--accent);background:var(--accent-soft);}
+    .api-body{padding:6px 14px 8px;background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);}
+    .api-input-row{display:flex;gap:6px;align-items:center;}
+    .api-input{flex:1;font-family:'SFMono','Consolas',monospace;font-size:11px;padding:6px 10px;letter-spacing:0.5px;}
+
+    .input-field{
+      background:var(--bg-input);border:1px solid var(--border-default);
+      border-radius:var(--radius-sm);padding:8px 10px;
+      color:var(--text-primary);font-size:13px;font-family:var(--font);
+      transition:var(--transition);outline:none;width:100%;
     }
-    .api-key-toggle-btn:hover { color: var(--accent-400); background: rgba(139,92,246,0.1); }
-    .api-key-body { margin-top: 6px; animation: fadeSlide 0.15s ease; }
-    .api-key-input-row { display: flex; gap: 6px; align-items: center; }
-    .api-key-input { flex: 1; font-family: 'SFMono','Consolas','Monaco',monospace; font-size: 12px; padding: 7px 10px; letter-spacing: 0.5px; }
-    .api-key-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 9px; }
-    #api-key-save-status { color: var(--text-muted); transition: var(--transition); }
-    #api-key-save-status.saving { color: var(--accent-amber); }
-    #api-key-save-status.saved { color: var(--accent-green); }
-    #api-key-save-status.error { color: var(--accent-red); }
-    .api-key-link { color: var(--accent-400); text-decoration: none; font-weight: 500; }
-    .api-key-link:hover { text-decoration: underline; }
+    .input-field:focus{border-color:var(--border-focus);box-shadow:0 0 0 3px var(--accent-soft);}
+    .input-field::placeholder{color:var(--text-muted);}
+    textarea.input-field{resize:vertical;min-height:52px;max-height:90px;}
+
+    select.input-field{
+      appearance:none;cursor:pointer;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b6b7a' viewBox='0 0 24 24'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat:no-repeat;background-position:right 10px center;padding-right:28px;
+    }
+    select.input-field option{background:#1c1c28;color:var(--text-primary);}
+
+    .api-meta{display:flex;justify-content:space-between;align-items:center;margin-top:3px;font-size:9px;}
+    .api-save-status{color:var(--text-muted);transition:var(--transition);}
+    .api-save-status.saving{color:var(--amber);}
+    .api-save-status.saved{color:var(--green);}
+    .api-save-status.error{color:var(--red);}
+    .api-link{color:var(--accent);text-decoration:none;font-weight:500;}
+    .api-link:hover{text-decoration:underline;}
 
     /* ═══════════ TABS ═══════════ */
-    .tabs {
-      display: flex;
-      background: rgba(12, 12, 28, 0.9);
-      border-bottom: 1px solid var(--glass-border);
-      padding: 0 6px;
-      gap: 2px;
-      overflow-x: auto;
+    .tabs{
+      display:flex;background:var(--bg-surface);
+      border-bottom:1px solid var(--border-subtle);padding:0 4px;gap:1px;
     }
-    .tabs::-webkit-scrollbar { height: 0; }
-    .tab-btn {
-      flex: 1;
-      min-width: 70px;
-      padding: 11px 4px;
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      font-size: 11px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: var(--transition);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
-      font-family: 'Inter', sans-serif;
-      white-space: nowrap;
-      position: relative;
+    .tab-btn{
+      flex:1;min-width:60px;padding:9px 4px;
+      background:none;border:none;color:var(--text-muted);
+      font-size:10px;font-weight:500;cursor:pointer;
+      font-family:var(--font);transition:var(--transition);
+      display:flex;align-items:center;justify-content:center;gap:5px;
+      border-bottom:2px solid transparent;margin-bottom:-1px;
+      white-space:nowrap;
     }
-    .tab-btn:hover { color: var(--text-secondary); background: rgba(255,255,255,0.03); }
-    .tab-btn.active { color: var(--accent-400); border-bottom-color: var(--accent-500); }
-    .tab-icon { font-size: 13px; }
-    .tab-badge {
-      background: linear-gradient(135deg, var(--accent-pink), #db2777);
-      color: white;
-      font-size: 9px;
-      padding: 2px 6px;
-      border-radius: 10px;
-      font-weight: 700;
-      box-shadow: 0 2px 8px rgba(236, 72, 153, 0.3);
-      animation: pulse 2s infinite;
+    .tab-btn:hover{color:var(--text-secondary);background:rgba(255,255,255,0.02);}
+    .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}
+    .tab-btn .icon{width:14px;height:14px;}
+    .tab-badge{
+      background:var(--gradient-primary);color:#fff;
+      font-size:8px;padding:1px 5px;border-radius:8px;font-weight:700;
+      box-shadow:0 2px 6px rgba(59,130,246,0.3);animation:pulse 2s infinite;
     }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
 
     /* ═══════════ TAB CONTENT ═══════════ */
-    .tab-content {
-      display: none;
-      padding: 16px;
-      animation: fadeSlide 0.2s cubic-bezier(0.22, 1, 0.36, 1);
-      max-height: 440px;
-      overflow-y: auto;
-      background: linear-gradient(180deg, rgba(16,16,36,0.5) 0%, var(--bg-deep) 100%);
+    .tc{
+      display:none;padding:14px;animation:fadeSlide .2s cubic-bezier(0.16,1,0.3,1);
+      flex:1;overflow-y:auto;max-height:440px;
     }
-    .tab-content.active { display: block; }
-    .tab-content::-webkit-scrollbar { width: 4px; }
-    .tab-content::-webkit-scrollbar-track { background: transparent; }
-    .tab-content::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
-
-    @keyframes fadeSlide { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
-    /* ═══════════ GLASS CARD UTILITY ═══════════ */
-    .glass {
-      background: var(--bg-card);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-sm);
-    }
-
-    /* ═══════════ FORM ELEMENTS ═══════════ */
-    .input-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
-    .input-label { font-size: 10px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; display: flex; align-items: center; gap: 5px; }
-    .input-field {
-      width: 100%;
-      background: var(--bg-input);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-sm);
-      padding: 10px 12px;
-      color: var(--text-primary);
-      font-size: 13px;
-      font-family: 'Inter', sans-serif;
-      transition: var(--transition);
-      outline: none;
-      backdrop-filter: blur(4px);
-    }
-    .input-field:focus { border-color: var(--glass-border-focus); box-shadow: 0 0 0 3px rgba(139,92,246,0.1), 0 0 16px rgba(124,58,237,0.15); background: rgba(42, 42, 78, 0.8); }
-    .input-field::placeholder { color: var(--text-muted); }
-    textarea.input-field { resize: vertical; min-height: 54px; max-height: 100px; }
-
-    .input-row { display: flex; gap: 8px; }
-    .input-row .input-group { flex: 1; }
-    .input-row .input-field { min-width: 0; }
-
-    select.input-field {
-      appearance: none;
-      cursor: pointer;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b6890' viewBox='0 0 24 24'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 12px center;
-      padding-right: 32px;
-    }
-    select.input-field option { background: #1a1a36; color: var(--text-primary); }
+    .tc.active{display:block;}
+    @keyframes fadeSlide{from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:translateY(0);}}
 
     /* ═══════════ BUTTONS ═══════════ */
-    .btn {
-      padding: 10px 18px;
-      border: none;
-      border-radius: var(--radius-sm);
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: var(--transition);
-      font-family: 'Inter', sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      position: relative;
-      overflow: hidden;
+    .btn{
+      padding:8px 16px;border:none;border-radius:var(--radius-sm);
+      font-size:12px;font-weight:600;cursor:pointer;
+      font-family:var(--font);transition:var(--transition);
+      display:inline-flex;align-items:center;justify-content:center;gap:6px;
     }
-    .btn::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%);
-      pointer-events: none;
-    }
-    .btn-primary {
-      background: var(--gradient-main);
-      color: white;
-      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.3);
-    }
-    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(124, 58, 237, 0.45); }
-    .btn-primary:active { transform: translateY(0); }
-    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
-    .btn-secondary { background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--glass-border); backdrop-filter: blur(4px); }
-    .btn-secondary:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: var(--glass-border-hover); }
-    .btn-sm { padding: 7px 12px; font-size: 11px; border-radius: 8px; }
-    .btn-xs { padding: 4px 8px; font-size: 10px; border-radius: 6px; }
-    .btn-full { width: 100%; }
-    .btn-group { display: flex; gap: 8px; }
+    .btn .icon{width:14px;height:14px;}
 
-    .btn-success { background: linear-gradient(135deg, #059669, #34d399); color: white; box-shadow: 0 4px 16px rgba(52,211,153,0.3); }
-    .btn-warning { background: linear-gradient(135deg, #d97706, #f59e0b); color: white; }
-    .btn-danger { background: linear-gradient(135deg, #dc2626, #ef4444); color: white; }
+    .btn-primary{background:var(--gradient-primary);color:#fff;box-shadow:0 3px 12px rgba(59,130,246,0.25);}
+    .btn-primary:hover{box-shadow:0 6px 20px rgba(59,130,246,0.35);transform:translateY(-1px);}
+    .btn-primary:active{transform:translateY(0);}
+    .btn-primary:disabled{opacity:0.4;cursor:not-allowed;transform:none;box-shadow:none;}
 
-    /* ═══════════ RESULT / DEFINITION ═══════════ */
-    .result-card {
-      background: var(--bg-card);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-md);
-      padding: 16px;
-      margin-top: 12px;
-      display: none;
-      animation: slideUp 0.3s cubic-bezier(0.22, 1, 0.36, 1);
-      box-shadow: var(--shadow-card);
-    }
-    .result-card.visible { display: block; }
-    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    .result-term {
-      font-size: 11px;
-      font-weight: 700;
-      background: var(--gradient-text);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .result-term::before {
-      content: '';
-      width: 3px;
-      height: 16px;
-      background: var(--gradient-main);
-      border-radius: 2px;
-      -webkit-text-fill-color: transparent;
-    }
-    .result-definition { font-size: 13px; line-height: 1.7; color: var(--text-primary); }
-    .result-meta { margin-top: 10px; font-size: 10px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .btn-secondary{background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border-default);}
+    .btn-secondary:hover{background:var(--bg-card-hover);color:var(--text-primary);border-color:var(--border-hover);}
 
-    .suggestions-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
-    .suggestions-list { display: flex; gap: 4px; flex-wrap: wrap; }
-    .suggestion-chip {
-      padding: 4px 10px;
-      border-radius: 12px;
-      border: 1px solid var(--glass-border);
-      background: var(--bg-input);
-      color: var(--accent-400);
-      font-size: 10px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: var(--transition);
-      font-family: 'Inter', sans-serif;
-    }
-    .suggestion-chip:hover { border-color: var(--accent-400); background: rgba(139,92,246,0.12); }
+    .btn-sm{padding:6px 12px;font-size:11px;border-radius:6px;}
+    .btn-xs{padding:3px 8px;font-size:10px;border-radius:4px;}
+    .btn-full{width:100%;}
+    .btn-group{display:flex;gap:8px;}
 
-    .followup-row { display: flex; gap: 6px; margin-top: 10px; }
-    .followup-input { flex: 1; padding: 8px 10px; font-size: 11px; }
-    .source-badge {
-      padding: 3px 8px;
-      border-radius: 10px;
-      font-size: 10px;
-      font-weight: 500;
-      backdrop-filter: blur(4px);
-    }
-    .source-badge.cache { background: rgba(52, 211, 153, 0.12); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.2); }
-    .source-badge.ai { background: rgba(139, 92, 246, 0.12); color: var(--accent-400); border: 1px solid var(--glass-border); }
+    /* ═══════════ FORM ═══════════ */
+    .input-group{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+    .input-label{font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;gap:5px;}
+    .input-row{display:flex;gap:8px;}
+    .input-row .input-group{flex:1;}
 
-    /* ═══════════ CARD ═══════════ */
-    .info-card {
-      background: var(--bg-card);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-sm);
-      padding: 12px 14px;
-      margin-bottom: 12px;
-      box-shadow: var(--shadow-card);
+    .toggle-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:var(--transition);}
+    .toggle-row:hover{color:var(--text-primary);}
+    .toggle-row input[type="checkbox"]{accent-color:var(--accent);width:13px;height:13px;}
+
+    /* ═══════════ RESULT CARD ═══════════ */
+    .result-card{
+      background:var(--bg-card);border:1px solid var(--border-default);
+      border-radius:var(--radius-md);padding:14px;margin-top:10px;
+      display:none;animation:slideUp .25s cubic-bezier(0.16,1,0.3,1);
     }
-    .info-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
-    .info-title { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .info-url { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    .result-card.visible{display:block;}
+    @keyframes slideUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+    .result-term{
+      font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;
+      letter-spacing:0.5px;margin-bottom:6px;display:flex;align-items:center;gap:6px;
+    }
+    .result-term span{background:var(--gradient-text);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+    .result-def{font-size:13px;line-height:1.7;color:var(--text-primary);}
+    .result-meta{margin-top:8px;font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+
+    .suggest-row{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;}
+    .suggest-list{display:flex;gap:4px;flex-wrap:wrap;}
+    .suggest-chip{
+      padding:3px 9px;border-radius:10px;
+      border:1px solid var(--border-default);
+      background:var(--bg-input);color:var(--accent);
+      font-size:10px;font-weight:500;cursor:pointer;
+      font-family:var(--font);transition:var(--transition);
+    }
+    .suggest-chip:hover{border-color:var(--accent-border);background:var(--accent-soft);}
+
+    .follow-row{display:flex;gap:6px;margin-top:8px;}
+    .follow-input{flex:1;padding:6px 10px;font-size:11px;}
+
+    .src-badge{
+      padding:2px 8px;border-radius:8px;font-size:10px;font-weight:500;
+    }
+    .src-badge.cache{background:var(--green-soft);color:var(--green);border:1px solid rgba(34,197,94,0.15);}
+    .src-badge.ai{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-border);}
+
+    /* ═══════════ INFO CARD ═══════════ */
+    .info-card{
+      background:var(--bg-card);border:1px solid var(--border-default);
+      border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:10px;
+    }
+    .info-label{font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;display:flex;align-items:center;gap:4px;}
+    .info-label .icon{width:12px;height:12px;color:var(--accent);}
+    .info-title{font-size:12px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .info-url{font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
+
+    /* ═══════════ REMINDER PANEL ═══════════ */
+    .reminder-opt{
+      background:var(--bg-card);border:1px solid var(--border-default);
+      border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;
+    }
+    .reminder-header{
+      display:flex;align-items:center;gap:6px;
+      font-size:11px;font-weight:500;color:var(--text-secondary);
+      cursor:pointer;transition:var(--transition);
+    }
+    .reminder-header:hover{color:var(--text-primary);}
+    .reminder-header .icon{width:14px;height:14px;}
+    .reminder-body{display:none;margin-top:8px;}
+    .reminder-body.open{display:block;animation:fadeSlide .15s ease;}
+    .reminder-pres{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;}
+    .preset-btn{
+      padding:4px 9px;font-size:9px;border-radius:10px;
+      border:1px solid var(--border-default);
+      background:var(--bg-input);color:var(--text-secondary);
+      cursor:pointer;font-family:var(--font);font-weight:500;transition:var(--transition);
+    }
+    .preset-btn:hover{border-color:var(--border-hover);color:var(--accent);background:var(--accent-soft);}
+    .preset-btn.active{border-color:var(--accent);background:var(--accent);color:#fff;}
 
     /* ═══════════ LISTS ═══════════ */
-    .item-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; padding-right: 2px; }
-    .item-list::-webkit-scrollbar { width: 4px; }
-    .item-list::-webkit-scrollbar-track { background: transparent; }
-    .item-list::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
-    .list-item {
-      background: var(--bg-card);
-      backdrop-filter: blur(8px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-sm);
-      padding: 12px 14px;
-      transition: var(--transition);
-      position: relative;
-      box-shadow: var(--shadow-card);
+    .item-list{display:flex;flex-direction:column;gap:5px;max-height:260px;overflow-y:auto;padding-right:2px;}
+    .list-item{
+      background:var(--bg-card);border:1px solid var(--border-default);
+      border-radius:var(--radius-sm);padding:10px 12px;
+      transition:var(--transition);
     }
-    .list-item:hover { border-color: var(--glass-border-hover); background: var(--bg-card-hover); transform: translateX(2px); }
-    .list-item-topic { font-size: 10px; font-weight: 700; color: var(--accent-400); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-    .list-item-title { font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .list-item-content { font-size: 12px; color: var(--text-primary); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .list-item-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
-    .list-item-date { font-size: 10px; color: var(--text-muted); }
-    .list-item-actions { display: flex; gap: 4px; }
+    .list-item:hover{border-color:var(--border-hover);background:var(--bg-card-hover);}
+    .list-topic{font-size:9px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:2px;display:flex;align-items:center;gap:4px;}
+    .list-topic .icon{width:11px;height:11px;}
+    .list-item-title{font-size:11px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .list-item-text{font-size:11px;color:var(--text-primary);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    .list-meta{display:flex;align-items:center;justify-content:space-between;margin-top:4px;}
+    .list-date{font-size:10px;color:var(--text-muted);}
+    .list-actions{display:flex;gap:4px;}
 
-    /* Highlight specific */
-    .highlight-quote {
-      font-size: 12px;
-      color: var(--text-200);
-      font-style: italic;
-      line-height: 1.5;
-      padding: 6px 10px;
-      margin: 4px 0;
-      border-left: 3px solid var(--accent-500);
-      background: rgba(139, 92, 246, 0.06);
-      border-radius: 0 6px 6px 0;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+    .tbl-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:var(--transition);display:flex;align-items:center;}
+    .tbl-btn:hover{color:var(--red);background:var(--red-soft);}
+    .tbl-btn .icon{width:14px;height:14px;}
+    .done-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:var(--transition);display:flex;align-items:center;}
+    .done-btn:hover{color:var(--green);background:var(--green-soft);}
+    .done-btn.done{color:var(--green);}
+
+    .highlight-quote{
+      font-size:11px;color:var(--text-secondary);font-style:italic;line-height:1.5;
+      padding:5px 8px;margin:3px 0;border-left:2px solid var(--accent);
+      background:var(--accent-soft);border-radius:0 4px 4px 0;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
     }
-    .highlight-color-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      margin-right: 4px;
-    }
-
-    .delete-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 3px 5px; border-radius: 6px; transition: var(--transition); line-height: 1; }
-    .delete-btn:hover { color: var(--accent-red); background: rgba(239, 68, 68, 0.1); }
-
-    .complete-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 3px 5px; border-radius: 6px; transition: var(--transition); }
-    .complete-btn:hover { color: var(--accent-green); background: rgba(52, 211, 153, 0.1); }
-    .complete-btn.done { color: var(--accent-green); }
+    .hl-color{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px;}
 
     /* ═══════════ EMPTY STATE ═══════════ */
-    .empty-state { text-align: center; padding: 32px 16px; color: var(--text-muted); }
-    .empty-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.6; }
-    .empty-title { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
-    .empty-subtitle { font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+    .empty{padding:24px 16px;text-align:center;color:var(--text-muted);}
+    .empty-icon{margin:0 auto 8px;width:36px;height:36px;color:var(--text-disabled);}
+    .empty-icon .icon{width:36px;height:36px;}
+    .empty-title{font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:2px;}
+    .empty-sub{font-size:11px;line-height:1.6;color:var(--text-muted);}
 
     /* ═══════════ STATUS ═══════════ */
-    .status-message {
-      padding: 10px 14px;
-      border-radius: var(--radius-sm);
-      font-size: 11px;
-      font-weight: 500;
-      margin-top: 10px;
-      display: none;
-      animation: slideUp 0.2s ease;
-      backdrop-filter: blur(8px);
+    .stmsg{
+      padding:8px 12px;border-radius:var(--radius-sm);
+      font-size:11px;font-weight:500;margin-top:8px;
+      display:none;animation:slideUp .15s ease;
     }
-    .status-message.visible { display: block; }
-    .status-message.success { background: rgba(52, 211, 153, 0.1); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.2); }
-    .status-message.error { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
-    .status-message.loading { background: rgba(139, 92, 246, 0.1); color: var(--accent-400); border: 1px solid var(--glass-border); }
+    .stmsg.visible{display:block;}
+    .stmsg.success{background:var(--green-soft);color:var(--green);border:1px solid rgba(34,197,94,0.15);}
+    .stmsg.error{background:var(--red-soft);color:var(--red);border:1px solid rgba(239,68,68,0.15);}
+    .stmsg.loading{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-border);}
 
-    .spinner {
-      display: inline-block; width: 14px; height: 14px;
-      border: 2px solid rgba(255,255,255,0.2); border-top-color: white;
-      border-radius: 50%; animation: spin 0.7s linear infinite;
+    .spinner{
+      display:inline-block;width:12px;height:12px;
+      border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;
+      border-radius:50%;animation:spin .7s linear infinite;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes spin{to{transform:rotate(360deg);}}
 
     /* ═══════════ STATS BAR ═══════════ */
-    .stats-bar { display: flex; gap: 6px; margin-bottom: 12px; }
-    .stat-chip {
-      flex: 1;
-      background: var(--bg-card);
-      backdrop-filter: blur(8px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-sm);
-      padding: 8px 6px;
-      text-align: center;
-      box-shadow: var(--shadow-card);
+    .stats-row{display:flex;gap:5px;margin-bottom:10px;}
+    .stat-chip{
+      flex:1;background:var(--bg-card);border:1px solid var(--border-default);
+      border-radius:var(--radius-sm);padding:6px 4px;text-align:center;
     }
-    .stat-value {
-      font-size: 17px;
-      font-weight: 800;
-      background: var(--gradient-text);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      line-height: 1.2;
-      letter-spacing: -0.5px;
+    .stat-val{
+      font-size:14px;font-weight:800;
+      background:var(--gradient-text);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+      line-height:1.1;letter-spacing:-0.3px;
     }
-    .stat-label { font-size: 9px; color: var(--text-muted); margin-top: 2px; font-weight: 500; }
+    .stat-lbl{font-size:8px;color:var(--text-muted);margin-top:1px;font-weight:500;}
 
-    /* ═══════════ SEARCH ROW ═══════════ */
-    .search-row { display: flex; gap: 6px; margin-bottom: 12px; }
-    .search-row .input-field { flex: 1; }
-    .search-row .btn { width: auto; padding: 10px 14px; flex-shrink: 0; }
+    /* ═══════════ HISTORY SUB-TABS ═══════════ */
+    .sub-tabs{display:flex;gap:4px;margin-bottom:8px;}
+    .sub-tab{flex:1;text-align:center;padding:5px;font-size:10px;border-radius:6px;border:1px solid var(--border-default);background:var(--bg-input);color:var(--text-muted);cursor:pointer;font-family:var(--font);font-weight:500;transition:var(--transition);}
+    .sub-tab:hover{border-color:var(--border-hover);color:var(--text-secondary);}
+    .sub-tab.active{border-color:var(--accent);background:var(--accent);color:#fff;}
 
-    /* ═══════════ REMINDER OPTIONS ═══════════ */
-    .reminder-options {
-      background: var(--bg-card);
-      backdrop-filter: blur(8px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-sm);
-      padding: 12px 14px;
-      margin-bottom: 10px;
-      box-shadow: var(--shadow-card);
-    }
-    .reminder-header {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      cursor: pointer;
-      transition: var(--transition);
-    }
-    .reminder-header:hover { color: var(--text-primary); }
-    .reminder-body { display: none; margin-top: 10px; }
-    .reminder-body.open { display: block; animation: fadeSlide 0.15s ease; }
-    .reminder-presets { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
-    .preset-btn {
-      padding: 5px 10px;
-      font-size: 10px;
-      border-radius: 12px;
-      border: 1px solid var(--glass-border);
-      background: var(--bg-input);
-      color: var(--text-secondary);
-      cursor: pointer;
-      transition: var(--transition);
-      font-family: 'Inter', sans-serif;
-      font-weight: 500;
-      backdrop-filter: blur(4px);
-    }
-    .preset-btn:hover { border-color: var(--glass-border-hover); color: var(--accent-400); background: rgba(139, 92, 246, 0.08); }
-    .preset-btn.active { border-color: var(--accent-500); background: var(--accent-600); color: white; box-shadow: 0 2px 12px rgba(124,58,237,0.3); }
+    .res-status{display:flex;align-items:center;gap:6px;font-size:10px;}
+    .st-badge{padding:2px 7px;border-radius:8px;font-size:9px;font-weight:500;}
+    .st-badge.done{background:var(--green-soft);color:var(--green);border:1px solid rgba(34,197,94,0.15);}
+    .st-badge.processing{background:var(--amber-soft);color:var(--amber);border:1px solid rgba(234,179,8,0.15);}
+    .st-badge.failed{background:var(--red-soft);color:var(--red);border:1px solid rgba(239,68,68,0.15);}
+    .st-badge.pending{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-border);}
 
-    /* ═══════════ RESEARCH CARD ═══════════ */
-    .research-status { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-    .status-badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 500; backdrop-filter: blur(4px); }
-    .status-badge.done { background: rgba(52, 211, 153, 0.12); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.2); }
-    .status-badge.processing { background: rgba(245, 158, 11, 0.12); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.2); }
-    .status-badge.failed { background: rgba(239, 68, 68, 0.12); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
-    .status-badge.pending { background: rgba(139, 92, 246, 0.12); color: var(--accent-400); border: 1px solid var(--glass-border); }
-
-    .research-result {
-      margin-top: 8px;
-      padding: 12px;
-      background: var(--bg-input);
-      backdrop-filter: blur(4px);
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--glass-border);
-      font-size: 11px;
-      line-height: 1.6;
-      color: var(--text-secondary);
-      max-height: 200px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-    }
+    .res-result{margin-top:6px;padding:10px;background:var(--bg-input);border-radius:var(--radius-sm);border:1px solid var(--border-default);font-size:11px;line-height:1.6;color:var(--text-secondary);max-height:160px;overflow-y:auto;white-space:pre-wrap;display:none;}
+    .res-result.visible{display:block;}
 
     /* ═══════════ SECTION DIVIDER ═══════════ */
-    .section-divider {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 16px 0 10px;
-      font-size: 10px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.7px;
+    .sec-div{
+      display:flex;align-items:center;gap:8px;
+      margin:12px 0 8px;font-size:10px;font-weight:600;
+      color:var(--text-muted);text-transform:uppercase;letter-spacing:0.6px;
     }
-    .section-divider::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: linear-gradient(90deg, var(--glass-border), transparent);
-    }
+    .sec-div::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--border-default),transparent);}
 
     /* ═══════════ FOOTER ═══════════ */
-    .footer {
-      padding: 10px 16px;
-      border-top: 1px solid var(--glass-border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: rgba(10, 10, 24, 0.95);
-      backdrop-filter: blur(8px);
+    .footer{
+      padding:8px 14px;border-top:1px solid var(--border-subtle);
+      display:flex;align-items:center;justify-content:space-between;
+      background:var(--bg-surface);flex-shrink:0;
     }
-    .footer-status { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-muted); }
-    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); transition: var(--transition); }
-    .status-dot.online { background: var(--accent-green); box-shadow: 0 0 6px rgba(52,211,153,0.5); }
-    .footer-link { font-size: 10px; color: var(--text-muted); text-decoration: none; transition: var(--transition); cursor: pointer; font-weight: 500; }
-    .footer-link:hover { color: var(--accent-400); }
-    .footer-left { display: flex; align-items: center; gap: 8px; }
-    .footer-right { display: flex; align-items: center; gap: 6px; }
-    .footer-status-details { display: flex; flex-direction: column; gap: 2px; }
-    .footer-action-btn {
-      background: var(--accent-600); color: white; border: none; border-radius: 4px;
-      padding: 3px 10px; font-size: 10px; font-weight: 600; cursor: pointer;
-      font-family: 'Inter', sans-serif; transition: var(--transition); line-height: 1.4;
+    .footer-left{display:flex;align-items:center;gap:8px;}
+    .footer-srv{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text-muted);}
+    .srv-dot{width:5px;height:5px;border-radius:50%;background:var(--red);box-shadow:0 0 5px rgba(239,68,68,0.3);transition:var(--transition);}
+    .srv-dot.online{background:var(--green);box-shadow:0 0 5px rgba(34,197,94,0.3);}
+    .footer-right{display:flex;align-items:center;gap:6px;}
+    .footer-link{font-size:10px;color:var(--text-muted);text-decoration:none;cursor:pointer;font-weight:500;transition:var(--transition);}
+    .footer-link:hover{color:var(--accent);}
+    .foot-btn{
+      background:var(--accent);color:#fff;border:none;border-radius:4px;
+      padding:2px 8px;font-size:10px;font-weight:600;cursor:pointer;
+      font-family:var(--font);transition:var(--transition);line-height:1.5;
     }
-    .footer-action-btn:hover { background: var(--accent-500); box-shadow: 0 2px 8px rgba(124,58,237,0.3); }
-
-    /* ═══════════ CHECKBOX TOGGLE ═══════════ */
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 11px;
-      color: var(--text-secondary);
-      cursor: pointer;
-      margin-bottom: 8px;
-      transition: var(--transition);
-    }
-    .toggle-row:hover { color: var(--text-primary); }
-    .toggle-row input[type="checkbox"] {
-      accent-color: var(--accent-600);
-      width: 14px;
-      height: 14px;
-    }
+    .foot-btn:hover{background:var(--accent-hover);}
 
     /* ═══════════ SETTINGS MODAL ═══════════ */
-    .modal-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.6);
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-      z-index: 100;
-      align-items: center;
-      justify-content: center;
-      animation: fadeIn 0.15s ease;
+    .modal-over{
+      display:none;position:fixed;inset:0;
+      background:var(--bg-overlay);backdrop-filter:blur(6px);
+      -webkit-backdrop-filter:blur(6px);z-index:100;
+      align-items:center;justify-content:center;
+      animation:fadeIn .15s ease;
     }
-    .modal-overlay.open { display: flex; }
-    .modal {
-      background: var(--bg-surface);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--radius-lg);
-      padding: 20px;
-      width: 90%;
-      max-width: 380px;
-      box-shadow: var(--shadow-elevated);
-      max-height: 90vh;
-      overflow-y: auto;
+    .modal-over.open{display:flex;}
+    .modal{
+      background:var(--bg-surface);border:1px solid var(--border-default);
+      border-radius:var(--radius-lg);padding:18px;
+      width:90%;max-width:360px;box-shadow:var(--shadow-lg);
+      max-height:90vh;overflow-y:auto;
     }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .modal h2{font-size:15px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+    @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+    .modal-close{
+      background:transparent;border:1px solid var(--border-subtle);
+      color:var(--text-muted);width:26px;height:26px;border-radius:6px;
+      cursor:pointer;display:flex;align-items:center;justify-content:center;
+      transition:var(--transition);
+    }
+    .modal-close:hover{color:var(--text-primary);border-color:var(--border-default);}
+    .modal-actions{display:flex;gap:8px;margin-top:14px;}
+    .modal-actions .btn{flex:1;}
+
+    /* ═══════════ RESEARCH CARD ═══════════ */
+    .search-row{display:flex;gap:6px;margin-bottom:10px;}
+    .search-row .input-field{flex:1;}
+    .search-row .btn{width:auto;padding:8px 12px;flex-shrink:0;}
   </style>
 </head>
 <body>
 
-  <!-- ══════════════════════════════════════
+  <!-- ══════════════════════════════════════════
        HEADER
-  ══════════════════════════════════════ -->
+  ══════════════════════════════════════════ -->
   <div class="header">
     <div class="header-left">
-      <div class="logo-icon">⏪</div>
+      <div class="logo-wrap">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 10a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v1H3v-1Z"/><path d="M3 14h18"/><path d="M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"/><path d="M12 6v4"/><path d="M3 14v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/>
+        </svg>
+      </div>
       <div>
-        <div class="header-title">easy-rewind</div>
-        <div class="header-subtitle">Knowledge Assistant</div>
+        <div class="header-title">easy-<span>rewind</span></div>
       </div>
     </div>
     <div class="header-actions">
-      <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
-      <button class="icon-btn" id="open-dashboard-btn" title="Dashboard">📊</button>
+      <button class="icon-btn" id="settings-btn" title="Settings">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="icon-btn" id="open-dashboard-btn" title="Dashboard">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+      </button>
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════
-       API KEY BAR (inline — always visible)
-  ══════════════════════════════════════ -->
-  <div class="api-key-bar" id="api-key-bar">
-    <div class="api-key-header" id="api-key-header">
-      <span class="api-key-dot" id="api-key-indicator"></span>
-      <span class="api-key-label">🔑 API Key</span>
-      <span class="api-key-status-text" id="api-key-status-text">Not configured</span>
-      <button class="api-key-toggle-btn" id="api-key-toggle-btn" title="Edit API key">✏️</button>
+  <!-- ══════════════════════════════════════════
+       API KEY BAR
+  ══════════════════════════════════════════ -->
+  <div class="api-bar" id="api-bar">
+    <span class="api-dot" id="api-indicator"></span>
+    <span class="api-label">API Key</span>
+    <span class="api-status" id="api-status-text">Not configured</span>
+    <button class="api-edit-btn" id="api-edit-btn" title="Edit">
+      <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+    </button>
+  </div>
+  <div class="api-body" id="api-body" style="display:none;">
+    <div class="api-input-row">
+      <input type="password" class="input-field api-input" id="api-key-input"
+        placeholder="Paste your Gemini API key..." autocomplete="off" spellcheck="false" />
+      <button class="btn btn-xs btn-secondary" id="api-vis-btn" title="Show/hide">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </div>
-    <div class="api-key-body" id="api-key-body" style="display:none;">
-      <div class="api-key-input-row">
-        <input type="password" class="input-field api-key-input" id="api-key-input"
-          placeholder="Paste your Gemini API key here..." autocomplete="off" spellcheck="false" />
-        <button class="btn btn-xs btn-secondary" id="api-key-visibility-btn" title="Show/hide key">👁️</button>
-      </div>
-      <div class="api-key-meta">
-        <span id="api-key-save-status"></span>
-        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="api-key-link">Get a free key</a>
-      </div>
+    <div class="api-meta">
+      <span class="api-save-status" id="api-save-status"></span>
+      <a href="https://aistudio.google.com/app/apikey" target="_blank" class="api-link">Get a free key</a>
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════
-       TAB NAVIGATION (4 tabs now)
-  ══════════════════════════════════════ -->
+  <!-- ══════════════════════════════════════════
+       TABS
+  ══════════════════════════════════════════ -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="search">
-      <span class="tab-icon">🔍</span> Search
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Search
     </button>
     <button class="tab-btn" data-tab="bookmark">
-      <span class="tab-icon">🔖</span> Bookmark
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      Bookmark
     </button>
     <button class="tab-btn" data-tab="notes" id="notes-tab-btn">
-      <span class="tab-icon">📝</span> Notes
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Notes
       <span class="tab-badge" id="notes-badge" style="display:none;">!</span>
     </button>
     <button class="tab-btn" data-tab="history">
-      <span class="tab-icon">📚</span> History
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      History
     </button>
   </div>
 
-  <!-- ══════════════════════════════════════
-       TAB 1: SEARCH (AI Quick Lookup)
-  ══════════════════════════════════════ -->
-  <div class="tab-content active" id="tab-search">
+  <!-- ══════════════════════════════════════════
+       TAB: SEARCH
+  ══════════════════════════════════════════ -->
+  <div class="tc active" id="tab-search">
     <div class="input-group">
-      <label class="input-label" for="search-term-input">🔍 Tech Term</label>
-      <input
-        type="text"
-        class="input-field"
-        id="search-term-input"
-        placeholder="e.g. GraphQL, await, Docker... (Ctrl+Shift+E)"
-        autocomplete="off"
-        spellcheck="false"
-        autofocus
-      />
+      <label class="input-label" for="search-term-input">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Tech Term
+      </label>
+      <input type="text" class="input-field" id="search-term-input"
+        placeholder="e.g. GraphQL, await, Docker..." autocomplete="off" autofocus />
     </div>
-
     <div class="btn-group">
       <button class="btn btn-primary btn-full" id="lookup-btn">
-        <span class="btn-text">✨ Get AI Definition</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Get AI Definition
       </button>
     </div>
-
-    <button class="btn btn-secondary btn-full" id="summarize-page-btn" title="Generate AI summary of the current page" style="margin-top:6px;">
-      📄 Summarize This Page
+    <button class="btn btn-secondary btn-full" id="summarize-page-btn" style="margin-top:5px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h12"/></svg>
+      Summarize This Page
     </button>
 
     <div class="result-card" id="definition-card">
-      <div class="result-term" id="result-term-label"></div>
-      <div class="result-definition" id="result-definition-text"></div>
-      <div class="suggestions-row" id="suggestions-row" style="display:none;">
+      <div class="result-term"><span id="result-term-label"></span></div>
+      <div class="result-def" id="result-definition-text"></div>
+      <div class="suggest-row" id="suggestions-row" style="display:none;">
         <span style="font-size:10px;color:var(--text-muted);">Related:</span>
-        <div class="suggestions-list" id="suggestions-list"></div>
+        <div class="suggest-list" id="suggestions-list"></div>
       </div>
-      <div class="followup-row" id="followup-row" style="display:none;">
-        <input type="text" class="input-field followup-input" id="followup-input"
+      <div class="follow-row" id="followup-row" style="display:none;">
+        <input type="text" class="input-field follow-input" id="followup-input"
           placeholder="Ask a follow-up..." autocomplete="off" />
         <button class="btn btn-secondary btn-sm" id="followup-btn">Ask</button>
       </div>
       <div class="result-meta">
-        <span id="result-source-badge" class="source-badge"></span>
+        <span class="src-badge" id="result-source-badge"></span>
         <span id="result-meta-text"></span>
       </div>
     </div>
 
     <div class="result-card" id="summary-card">
-      <div class="result-term">📄 Page Summary</div>
-      <div class="result-definition" id="summary-definition-text"></div>
+      <div class="result-term">Page Summary</div>
+      <div class="result-def" id="summary-definition-text"></div>
       <div class="result-meta" id="summary-meta"></div>
     </div>
 
-    <!-- Combined saved-content results (search bookmarks + notes) -->
-    <div id="search-saved-results" style="display:none;margin-top:12px;">
-      <div class="section-divider" style="margin:4px 0 8px;">📚 From Your Saved Content</div>
-      <div id="search-saved-list" class="item-list" style="max-height:200px;"></div>
+    <div id="search-saved-results" style="display:none;margin-top:10px;">
+      <div class="sec-div" style="margin:2px 0 6px;">From Your Saved Content</div>
+      <div id="search-saved-list" class="item-list" style="max-height:180px;"></div>
     </div>
 
-    <!-- Related Memories (shown when clicking a search result item) -->
-    <div id="search-related-results" style="display:none;margin-top:8px;">
-      <div class="section-divider" style="margin:4px 0 8px;">🔗 Related Memories</div>
-      <div id="search-related-list" class="item-list" style="max-height:150px;"></div>
+    <div id="search-related-results" style="display:none;margin-top:6px;">
+      <div class="sec-div" style="margin:2px 0 6px;">Related Memories</div>
+      <div id="search-related-list" class="item-list" style="max-height:130px;"></div>
     </div>
 
-    <div class="status-message" id="search-status"></div>
+    <div class="stmsg" id="search-status"></div>
   </div>
 
-  <!-- ══════════════════════════════════════
-       SETTINGS MODAL (outside all tabs)
-  ══════════════════════════════════════ -->
-  <div class="modal-overlay" id="settings-overlay">
-    <div class="modal" id="settings-modal">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <div style="font-size:16px;font-weight:700;">⚙ Settings</div>
-        <button class="icon-btn" id="settings-close-btn" style="width:28px;height:28px;">✕</button>
-      </div>
-
-      <div class="input-group">
-        <label class="input-label" for="settings-api-url">🌐 API Server URL</label>
-        <input type="url" class="input-field" id="settings-api-url"
-          placeholder="http://localhost:5000" autocomplete="off" />
-      </div>
-
-      <div class="input-group">
-        <label class="input-label" for="settings-api-key">🔑 Gemini API Key</label>
-        <input type="password" class="input-field" id="settings-api-key"
-          placeholder="Leave blank to use server .env" autocomplete="off" />
-        <div style="font-size:9px;color:var(--text-muted);margin-top:3px;">
-          Stored locally. Leave empty to use the key set on the server.
-        </div>
-      </div>
-
-      <div class="input-group">
-        <label class="input-label" for="settings-ai-model">🧠 AI Model</label>
-        <select class="input-field" id="settings-ai-model">
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-          <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-          <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-        </select>
-      </div>
-
-      <div class="input-group">
-        <label class="input-label" for="settings-summ-backend">📄 Summarization Backend</label>
-        <select class="input-field" id="settings-summ-backend">
-          <option value="auto">Auto (on-device AI then backend)</option>
-          <option value="chrome">On-device (Summarizer API)</option>
-          <option value="gemini">Server AI (Gemini)</option>
-        </select>
-      </div>
-
-      <div class="input-group">
-        <label class="input-label" for="settings-embed-provider">🧬 Embedding Provider</label>
-        <select class="input-field" id="settings-embed-provider">
-          <option value="auto">Auto (Gemini → hash fallback)</option>
-          <option value="gemini">Gemini (text-embedding-004)</option>
-          <option value="openai">OpenAI (text-embedding-ada-002)</option>
-        </select>
-        <div style="font-size:9px;color:var(--text-muted);margin-top:3px;">
-          Used for semantic search. OpenAI requires an OpenAI key in the API Key field.
-        </div>
-      </div>
-
-      <div class="input-group" style="flex-direction:row;align-items:center;gap:8px;">
-        <input type="checkbox" id="settings-spaced-review" style="width:auto;" />
-        <label class="input-label" for="settings-spaced-review" style="margin-bottom:0;">🔄 Spaced Review (auto-repeating reminders)</label>
-      </div>
-
-      <div class="input-group" id="settings-review-interval-group">
-        <label class="input-label" for="settings-review-interval">📅 Review every N days</label>
-        <input type="number" class="input-field" id="settings-review-interval"
-          value="3" placeholder="3" min="1" max="365" />
-      </div>
-
-      <div class="input-group" style="flex-direction:row;align-items:center;gap:8px;">
-        <input type="checkbox" id="settings-auto-capture" style="width:auto;" checked />
-        <label class="input-label" for="settings-auto-capture" style="margin-bottom:0;">🧠 Auto-Capture (prompt to save when deeply reading)</label>
-      </div>
-      <div style="font-size:9px;color:var(--text-muted);margin-top:-6px;margin-bottom:8px;padding-left:24px;">
-        After ~5 min of reading or 80%+ scroll depth, suggests saving the page to memory.
-      </div>
-
-      <div class="section-divider" style="margin:16px 0 10px;">📦 Data</div>
-
-      <div style="display:flex;gap:6px;margin-bottom:12px;">
-        <button class="btn btn-secondary btn-sm" style="flex:1;" id="export-data-btn">💾 Export</button>
-        <label class="btn btn-secondary btn-sm" style="flex:1;cursor:pointer;" id="import-data-label">
-          📂 Import
-          <input type="file" id="import-data-input" accept=".json" style="display:none;" />
-        </label>
-      </div>
-
-      <div style="display:flex;gap:8px;margin-top:16px;">
-        <button class="btn btn-secondary" style="flex:1;" id="settings-cancel-btn">Cancel</button>
-        <button class="btn btn-primary" style="flex:1;" id="settings-save-btn">💾 Save</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════
-       TAB 2: BOOKMARK
-  ══════════════════════════════════════ -->
-  <div class="tab-content" id="tab-bookmark">
+  <!-- ══════════════════════════════════════════
+       TAB: BOOKMARK
+  ══════════════════════════════════════════ -->
+  <div class="tc" id="tab-bookmark">
     <div class="info-card" id="page-info-card">
-      <div class="info-label">📄 Current Page</div>
+      <div class="info-label">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        Current Page
+      </div>
       <div class="info-title" id="page-title-display">Loading...</div>
       <div class="info-url" id="page-url-display"></div>
     </div>
 
     <div class="input-group">
-      <label class="input-label" for="topic-input">🏷 Topic Label</label>
+      <label class="input-label" for="topic-input">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        Topic Label
+      </label>
       <input type="text" class="input-field" id="topic-input"
-        placeholder="e.g. React Suspense, Docker networking..."
-        autocomplete="off" />
+        placeholder="e.g. React Suspense, Docker..." autocomplete="off" />
     </div>
 
     <div class="input-group">
-      <label class="input-label" for="notes-input">📝 Notes (optional)</label>
+      <label class="input-label" for="notes-input">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        Notes
+      </label>
       <textarea class="input-field" id="notes-input"
-        placeholder="Why is this interesting? What do you want to remember?"></textarea>
+        placeholder="Why is this interesting?"></textarea>
     </div>
 
-    <!-- Reminder option -->
-    <div class="reminder-options">
+    <!-- Reminder -->
+    <div class="reminder-opt">
       <div class="reminder-header" id="bookmark-reminder-toggle">
-        <span>⏰</span> Set a reminder to review this later
-        <span style="margin-left:auto;">▾</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        Set a reminder to review this later
+        <span style="margin-left:auto;font-size:10px;color:var(--text-muted);">Toggle</span>
       </div>
       <div class="reminder-body" id="bookmark-reminder-body">
-        <div class="reminder-presets">
+        <div class="reminder-pres">
           <button class="preset-btn" data-minutes="30">30 min</button>
           <button class="preset-btn" data-minutes="60">1 hour</button>
           <button class="preset-btn" data-minutes="180">3 hours</button>
@@ -959,47 +627,51 @@
       </div>
     </div>
 
-    <!-- Research Later option -->
     <label class="toggle-row" id="research-toggle-row">
       <input type="checkbox" id="research-toggle" />
-      <span>🧠 Research Later — AI will analyze this page and email you insights</span>
+      <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      Research Later — AI will analyze this page
     </label>
 
-    <div class="btn-group">
-      <button class="btn btn-primary btn-full" id="save-bookmark-btn">
-        <span class="btn-text">🔖 Save Bookmark</span>
-      </button>
-    </div>
+    <button class="btn btn-primary btn-full" id="save-bookmark-btn">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      Save Bookmark
+    </button>
 
-    <div class="status-message" id="bookmark-status"></div>
+    <div class="stmsg" id="bookmark-status"></div>
   </div>
 
-  <!-- ══════════════════════════════════════
-       TAB 3: QUICK NOTES (Problem #4)
-  ══════════════════════════════════════ -->
-  <div class="tab-content" id="tab-notes">
+  <!-- ══════════════════════════════════════════
+       TAB: NOTES
+  ══════════════════════════════════════════ -->
+  <div class="tc" id="tab-notes">
     <div class="input-group">
-      <label class="input-label" for="note-content-input">💡 Quick Thought</label>
+      <label class="input-label" for="note-content-input">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        Quick Thought
+      </label>
       <textarea class="input-field" id="note-content-input"
-        placeholder="What just crossed your mind? I'll remind you before you forget..."
-        style="min-height:70px;"></textarea>
+        placeholder="What just crossed your mind?" style="min-height:60px;"></textarea>
     </div>
 
     <div class="info-card" id="note-page-info" style="display:none;">
-      <div class="info-label">📍 From page</div>
+      <div class="info-label">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        From page
+      </div>
       <div class="info-title" id="note-source-title"></div>
       <div class="info-url" id="note-source-url"></div>
     </div>
 
-    <!-- Reminder options for notes -->
-    <div class="reminder-options">
+    <div class="reminder-opt">
       <div class="reminder-header" id="note-reminder-toggle">
-        <span>⏰</span> Remind me
-        <span style="margin-left:auto;">▾</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        Remind me
+        <span style="margin-left:auto;font-size:10px;color:var(--text-muted);">Toggle</span>
       </div>
       <div class="reminder-body open" id="note-reminder-body">
-        <div class="reminder-presets">
-          <button class="preset-btn active" data-minutes="0">When I leave this tab</button>
+        <div class="reminder-pres">
+          <button class="preset-btn active" data-minutes="0">On tab close</button>
           <button class="preset-btn" data-minutes="30">30 min</button>
           <button class="preset-btn" data-minutes="60">1 hour</button>
           <button class="preset-btn" data-minutes="180">3 hours</button>
@@ -1011,117 +683,233 @@
             <input type="number" class="input-field" id="note-reminder-custom" placeholder="e.g. 15" min="1" />
           </div>
         </div>
-        <div class="toggle-row" style="margin-top:4px;margin-bottom:0;">
+        <div class="toggle-row" style="margin-top:3px;margin-bottom:0;">
           <input type="checkbox" id="note-reminder-tab-close" checked />
-          <span style="font-size:10px;">Remind me when I leave this tab</span>
+          <span style="font-size:10px;">Remind when I leave this tab</span>
         </div>
       </div>
     </div>
 
     <button class="btn btn-primary btn-full" id="save-note-btn">
-      <span class="btn-text">💾 Save Thought</span>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      Save Thought
     </button>
 
-    <div class="status-message" id="note-status"></div>
+    <div class="stmsg" id="note-status"></div>
 
-    <div class="section-divider">Recent Thoughts</div>
+    <div class="sec-div">Recent Thoughts</div>
 
     <div class="item-list" id="recent-notes-list">
-      <div class="empty-state">
-        <div class="empty-icon">💭</div>
+      <div class="empty">
+        <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div>
         <div class="empty-title">No thoughts captured yet</div>
-        <div class="empty-subtitle">Ideas vanish fast — write them down here</div>
+        <div class="empty-sub">Ideas vanish fast — write them down here</div>
       </div>
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════
-       TAB 4: HISTORY (Bookmarks + Research)
-  ══════════════════════════════════════ -->
-  <div class="tab-content" id="tab-history">
-    <div class="stats-bar">
+  <!-- ══════════════════════════════════════════
+       TAB: HISTORY
+  ══════════════════════════════════════════ -->
+  <div class="tc" id="tab-history">
+    <div class="stats-row">
       <div class="stat-chip">
-        <div class="stat-value" id="total-bookmarks-stat">—</div>
-        <div class="stat-label">Bookmarks</div>
+        <div class="stat-val" id="total-bookmarks-stat">—</div>
+        <div class="stat-lbl">Bookmarks</div>
       </div>
       <div class="stat-chip">
-        <div class="stat-value" id="unique-topics-stat">—</div>
-        <div class="stat-label">Topics</div>
+        <div class="stat-val" id="unique-topics-stat">—</div>
+        <div class="stat-lbl">Topics</div>
       </div>
       <div class="stat-chip">
-        <div class="stat-value" id="total-research-stat">—</div>
-        <div class="stat-label">Research</div>
+        <div class="stat-val" id="total-research-stat">—</div>
+        <div class="stat-lbl">Research</div>
       </div>
       <div class="stat-chip">
-        <div class="stat-value" id="total-highlights-stat">—</div>
-        <div class="stat-label">Highlights</div>
+        <div class="stat-val" id="total-highlights-stat">—</div>
+        <div class="stat-lbl">Highlights</div>
       </div>
     </div>
 
     <div class="search-row">
       <input type="text" class="input-field" id="history-search-input"
         placeholder="Search bookmarks..." autocomplete="off" />
-      <button class="btn btn-secondary btn-sm" id="history-search-btn" style="min-width:60px;">Search</button>
+      <button class="btn btn-secondary btn-sm" id="history-search-btn">Search</button>
     </div>
 
-    <!-- Sub-tabs for History: Bookmarks / Research / Highlights -->
-    <div style="display:flex;gap:4px;margin-bottom:10px;">
-      <button class="preset-btn active" id="history-sub-bm" style="flex:1;text-align:center;">📚 Bookmarks</button>
-      <button class="preset-btn" id="history-sub-research" style="flex:1;text-align:center;">🧠 Research</button>
-      <button class="preset-btn" id="history-sub-highlights" style="flex:1;text-align:center;">🖍 Highlights</button>
+    <div class="sub-tabs">
+      <button class="sub-tab active" id="history-sub-bm">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        Bookmarks
+      </button>
+      <button class="sub-tab" id="history-sub-research">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Research
+      </button>
+      <button class="sub-tab" id="history-sub-highlights">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        Highlights
+      </button>
     </div>
 
-    <!-- Bookmarks sub-tab -->
     <div id="history-bookmarks">
       <div class="item-list" id="bookmarks-list">
-        <div class="empty-state">
-          <div class="empty-icon">📚</div>
+        <div class="empty">
+          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></div>
           <div class="empty-title">No bookmarks yet</div>
-          <div class="empty-subtitle">Switch to the Bookmark tab to save your first page</div>
+          <div class="empty-sub">Save one from the Bookmark tab</div>
         </div>
       </div>
     </div>
 
-    <!-- Research sub-tab -->
     <div id="history-research" style="display:none;">
       <div class="item-list" id="research-list">
-        <div class="empty-state">
-          <div class="empty-icon">🧠</div>
+        <div class="empty">
+          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
           <div class="empty-title">No research yet</div>
-          <div class="empty-subtitle">Toggle "Research Later" when bookmarking a page</div>
+          <div class="empty-sub">Toggle "Research Later" when bookmarking</div>
         </div>
       </div>
     </div>
 
-    <!-- Highlights sub-tab -->
     <div id="history-highlights" style="display:none;">
       <div class="item-list" id="highlights-list">
-        <div class="empty-state">
-          <div class="empty-icon">🖍</div>
+        <div class="empty">
+          <div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div>
           <div class="empty-title">No highlights yet</div>
-          <div class="empty-subtitle">Select text on any page, right-click → Save highlight to easy-rewind</div>
+          <div class="empty-sub">Select text, right-click &rarr; Save highlight</div>
         </div>
       </div>
     </div>
 
-    <div class="status-message" id="history-status"></div>
+    <div class="stmsg" id="history-status"></div>
   </div>
 
-  <!-- ══════════════════════════════════════
+  <!-- ══════════════════════════════════════════
+       SETTINGS MODAL
+  ══════════════════════════════════════════ -->
+  <div class="modal-over" id="settings-overlay">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2>
+          <svg class="icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </h2>
+        <button class="modal-close" id="settings-close-btn">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="settings-api-url">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          API Server URL
+        </label>
+        <input type="url" class="input-field" id="settings-api-url"
+          placeholder="http://localhost:5000" autocomplete="off" />
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="settings-api-key">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Gemini API Key
+        </label>
+        <input type="password" class="input-field" id="settings-api-key"
+          placeholder="Leave blank to use server .env" autocomplete="off" />
+        <div style="font-size:9px;color:var(--text-muted);margin-top:2px;">Stored locally. Leave empty to use the server .env key.</div>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="settings-ai-model">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          AI Model
+        </label>
+        <select class="input-field" id="settings-ai-model">
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+          <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+          <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+        </select>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="settings-summ-backend">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h12"/></svg>
+          Summarization Backend
+        </label>
+        <select class="input-field" id="settings-summ-backend">
+          <option value="auto">Auto (on-device AI then backend)</option>
+          <option value="chrome">On-device (Summarizer API)</option>
+          <option value="gemini">Server AI (Gemini)</option>
+        </select>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="settings-embed-provider">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          Embedding Provider
+        </label>
+        <select class="input-field" id="settings-embed-provider">
+          <option value="auto">Auto (Gemini to hash fallback)</option>
+          <option value="gemini">Gemini (text-embedding-004)</option>
+          <option value="openai">OpenAI (text-embedding-ada-002)</option>
+        </select>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:2px;">Used for semantic search.</div>
+      </div>
+
+      <div class="toggle-row" style="margin-bottom:6px;">
+        <input type="checkbox" id="settings-spaced-review" />
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        Spaced Review (auto-repeating reminders)
+      </div>
+
+      <div class="input-group" id="settings-review-interval-group">
+        <label class="input-label" for="settings-review-interval">Review every N days</label>
+        <input type="number" class="input-field" id="settings-review-interval" value="3" min="1" max="365" />
+      </div>
+
+      <div class="toggle-row" style="margin-bottom:6px;">
+        <input type="checkbox" id="settings-auto-capture" checked />
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Auto-Capture (deep reading detection)
+      </div>
+
+      <div class="sec-div">Data</div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button class="btn btn-secondary btn-sm" style="flex:1;" id="export-data-btn">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export
+        </button>
+        <label class="btn btn-secondary btn-sm" style="flex:1;cursor:pointer;">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import
+          <input type="file" id="import-data-input" accept=".json" style="display:none;" />
+        </label>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="settings-cancel-btn">Cancel</button>
+        <button class="btn btn-primary" id="settings-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
        FOOTER
-  ══════════════════════════════════════ -->
+  ══════════════════════════════════════════ -->
   <div class="footer">
     <div class="footer-left">
-      <div class="footer-status" id="server-status-group">
-        <div class="status-dot" id="server-status-dot"></div>
-        <div class="footer-status-details">
-          <span id="server-status-text">Checking server...</span>
-          <button class="footer-action-btn" id="start-server-btn" style="display:none;">▶ Start Server</button>
+      <div class="footer-srv" id="server-status-group">
+        <span class="srv-dot" id="server-status-dot"></span>
+        <div>
+          <span id="server-status-text">Checking...</span>
+          <button class="foot-btn" id="start-server-btn" style="display:none;">Start Server</button>
         </div>
       </div>
     </div>
     <div class="footer-right">
-      <span class="footer-link" id="footer-dashboard-link">Dashboard →</span>
+      <span class="footer-link" id="footer-dashboard-link">Dashboard</span>
     </div>
   </div>
 
