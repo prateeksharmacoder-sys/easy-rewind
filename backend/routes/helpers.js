@@ -293,7 +293,11 @@ function loadSettings() {
     if (fs.existsSync(SETTINGS_PATH)) {
       const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
       const saved = JSON.parse(raw);
-      if (saved.apiKey || saved.gemini_api_key) config.apiKey = saved.apiKey || saved.gemini_api_key;
+      const savedKey = saved.apiKey || saved.gemini_api_key;
+      // Only override with saved key if it's not the placeholder AND not empty
+      if (savedKey && savedKey !== 'your_gemini_api_key_here') {
+        config.apiKey = savedKey;
+      }
       if (saved.apiBaseUrl || saved.api_base_url)
         config.apiBaseUrl = saved.apiBaseUrl || saved.api_base_url || 'http://localhost:5000';
       if (saved.summarizationBackend || saved.summarization_backend)

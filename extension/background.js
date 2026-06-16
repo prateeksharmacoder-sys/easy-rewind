@@ -27,6 +27,26 @@ function getApiUrl(path) {
 }
 
 // ─────────────────────────────────────────────
+// SERVER HEALTH BADGE
+// ─────────────────────────────────────────────
+
+async function updateServerBadge() {
+  try {
+    const { easy_rewind_api_base } = await chrome.storage.local.get('easy_rewind_api_base');
+    const base = (easy_rewind_api_base || 'http://localhost:5000').replace(/\/+$/, '');
+    const response = await fetch(`${base}/api/health`);
+    if (response.ok) {
+      await chrome.action.setBadgeText({ text: '' });
+    } else {
+      throw new Error('Unhealthy');
+    }
+  } catch {
+    await chrome.action.setBadgeText({ text: '!!' });
+    await chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
+  }
+}
+
+// ─────────────────────────────────────────────
 // SYNC TRACKER
 // ─────────────────────────────────────────────
 
@@ -254,6 +274,11 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     chrome.alarms.create('check-reminders', {
       periodInMinutes: REMINDER_CHECK_INTERVAL,
     });
+
+    // Set up server health check badge
+    chrome.alarms.create('check-server-health', {
+      periodInMinutes: 2,
+    });
   }
 
   // Load auto-capture settings on install/update
@@ -450,6 +475,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'cleanup-engagement') {
     cleanEngagementState();
   }
+  if (alarm.name === 'check-server-health') {
+    updateServerBadge();
+  }
 });
 
 async function checkDueReminders() {
@@ -597,6 +625,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'REFRESH_SERVER_BADGE') {
+    updateServerBadge();
+    sendResponse({ updated: true });
+    return true;
+  }
+
   if (message.type === 'PING') {
     sendResponse({ status: 'alive' });
   }
@@ -606,6 +640,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // INIT: load settings on startup
 // ─────────────────────────────────────────────
 loadAutoCaptureSettings();
+
+// Check server health on background start and set badge
+updateServerBadge();
 
 // Set up engagement cleanup alarm
 chrome.alarms.create('cleanup-engagement', {

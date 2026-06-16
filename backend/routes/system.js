@@ -533,7 +533,11 @@ router.post('/settings', (req, res) => {
   } = req.body;
 
   if (gemini_api_key !== undefined) {
-    config.apiKey = gemini_api_key || null;
+    // Only update the key when a valid value is provided — never clear it
+    // with null/empty (prevents overwrite from extension init)
+    if (gemini_api_key && gemini_api_key !== 'your_gemini_api_key_here') {
+      config.apiKey = gemini_api_key;
+    }
     resetGenAI();
   }
 

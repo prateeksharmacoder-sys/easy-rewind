@@ -155,6 +155,48 @@
     }
     .icon-btn:hover { background: rgba(255,255,255,0.12); color: white; transform: translateY(-1px); border-color: rgba(255,255,255,0.2); }
 
+    /* ═══════════ API KEY BAR ═══════════ */
+    .api-key-bar {
+      background: rgba(10, 10, 24, 0.9);
+      border-bottom: 1px solid var(--glass-border);
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+    .api-key-bar:hover { background: rgba(16, 16, 36, 0.95); }
+    .api-key-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+    }
+    .api-key-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: var(--transition);
+    }
+    .api-key-dot.configured { background: var(--accent-green); box-shadow: 0 0 6px rgba(52,211,153,0.5); }
+    .api-key-dot.missing { background: var(--accent-red); box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+    .api-key-label { font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; font-size: 10px; }
+    .api-key-status-text { color: var(--text-muted); font-size: 10px; flex: 1; }
+    .api-key-toggle-btn {
+      background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px;
+      padding: 2px 6px; border-radius: 4px; transition: var(--transition); line-height: 1;
+    }
+    .api-key-toggle-btn:hover { color: var(--accent-400); background: rgba(139,92,246,0.1); }
+    .api-key-body { margin-top: 6px; animation: fadeSlide 0.15s ease; }
+    .api-key-input-row { display: flex; gap: 6px; align-items: center; }
+    .api-key-input { flex: 1; font-family: 'SFMono','Consolas','Monaco',monospace; font-size: 12px; padding: 7px 10px; letter-spacing: 0.5px; }
+    .api-key-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 9px; }
+    #api-key-save-status { color: var(--text-muted); transition: var(--transition); }
+    #api-key-save-status.saving { color: var(--accent-amber); }
+    #api-key-save-status.saved { color: var(--accent-green); }
+    #api-key-save-status.error { color: var(--accent-red); }
+    .api-key-link { color: var(--accent-400); text-decoration: none; font-weight: 500; }
+    .api-key-link:hover { text-decoration: underline; }
+
     /* ═══════════ TABS ═══════════ */
     .tabs {
       display: flex;
@@ -594,6 +636,15 @@
     .status-dot.online { background: var(--accent-green); box-shadow: 0 0 6px rgba(52,211,153,0.5); }
     .footer-link { font-size: 10px; color: var(--text-muted); text-decoration: none; transition: var(--transition); cursor: pointer; font-weight: 500; }
     .footer-link:hover { color: var(--accent-400); }
+    .footer-left { display: flex; align-items: center; gap: 8px; }
+    .footer-right { display: flex; align-items: center; gap: 6px; }
+    .footer-status-details { display: flex; flex-direction: column; gap: 2px; }
+    .footer-action-btn {
+      background: var(--accent-600); color: white; border: none; border-radius: 4px;
+      padding: 3px 10px; font-size: 10px; font-weight: 600; cursor: pointer;
+      font-family: 'Inter', sans-serif; transition: var(--transition); line-height: 1.4;
+    }
+    .footer-action-btn:hover { background: var(--accent-500); box-shadow: 0 2px 8px rgba(124,58,237,0.3); }
 
     /* ═══════════ CHECKBOX TOGGLE ═══════════ */
     .toggle-row {
@@ -659,6 +710,29 @@
     <div class="header-actions">
       <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
       <button class="icon-btn" id="open-dashboard-btn" title="Dashboard">📊</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       API KEY BAR (inline — always visible)
+  ══════════════════════════════════════ -->
+  <div class="api-key-bar" id="api-key-bar">
+    <div class="api-key-header" id="api-key-header">
+      <span class="api-key-dot" id="api-key-indicator"></span>
+      <span class="api-key-label">🔑 API Key</span>
+      <span class="api-key-status-text" id="api-key-status-text">Not configured</span>
+      <button class="api-key-toggle-btn" id="api-key-toggle-btn" title="Edit API key">✏️</button>
+    </div>
+    <div class="api-key-body" id="api-key-body" style="display:none;">
+      <div class="api-key-input-row">
+        <input type="password" class="input-field api-key-input" id="api-key-input"
+          placeholder="Paste your Gemini API key here..." autocomplete="off" spellcheck="false" />
+        <button class="btn btn-xs btn-secondary" id="api-key-visibility-btn" title="Show/hide key">👁️</button>
+      </div>
+      <div class="api-key-meta">
+        <span id="api-key-save-status"></span>
+        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="api-key-link">Get a free key</a>
+      </div>
     </div>
   </div>
 
@@ -1037,11 +1111,18 @@
        FOOTER
   ══════════════════════════════════════ -->
   <div class="footer">
-    <div class="footer-status">
-      <div class="status-dot" id="server-status-dot"></div>
-      <span id="server-status-text">Checking server...</span>
+    <div class="footer-left">
+      <div class="footer-status" id="server-status-group">
+        <div class="status-dot" id="server-status-dot"></div>
+        <div class="footer-status-details">
+          <span id="server-status-text">Checking server...</span>
+          <button class="footer-action-btn" id="start-server-btn" style="display:none;">▶ Start Server</button>
+        </div>
+      </div>
     </div>
-    <span class="footer-link" id="footer-dashboard-link">Open Dashboard →</span>
+    <div class="footer-right">
+      <span class="footer-link" id="footer-dashboard-link">Dashboard →</span>
+    </div>
   </div>
 
   <script src="popup.js"></script>

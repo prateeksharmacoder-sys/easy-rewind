@@ -13,6 +13,7 @@ const { app, BrowserWindow, Tray, Menu, Notification, globalShortcut, nativeImag
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const { spawn } = require('child_process');
 
 // ─────────────────────────────────────────────
 // CONFIG
@@ -29,6 +30,11 @@ let overlayWindow = null;
 let reminderInterval = null;
 let userId = null;
 let desktopSettings = { apiBase: '', apiKey: '', aiModel: 'gemini-2.5-flash', reminderMinutes: 60 };
+
+// Backend process management
+let backendProcess = null;
+let backendRunning = false;
+const BACKEND_DIR = path.join(__dirname, '..', 'backend');
 
 function getEffectiveApiBase() {
   return (desktopSettings.apiBase && desktopSettings.apiBase.trim())
@@ -54,6 +60,103 @@ function saveDesktopSettings() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(DESKTOP_SETTINGS_PATH, JSON.stringify(desktopSettings, null, 2));
   } catch (_) {}
+}
+
+// ─────────────────────────────────────────────
+// BACKEND SERVER MANAGEMENT
+// ─────────────────────────────────────────────
+
+function startBackend() {
+  if (backendProcess) {
+    console.log('[Backend] Already running');
+    return;
+  }
+
+  console.log('[Backend] Starting Node.js server...');
+
+  const nodeExe = process.platform === 'win32' ? 'node.exe' : 'node';
+
+  backendProcess = spawn(nodeExe, ['server.js'], {
+    cwd: BACKEND_DIR,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: false,
+    shell: process.platform === 'win32',
+  });
+
+  backendRunning = true;
+
+  backendProcess.stdout.on('data', (data) => {
+    console.log(`[Backend] ${data.toString().trim()}`);
+  });
+
+  backendProcess.stderr.on('data', (data) => {
+    console.error(`[Backend] ${data.toString().trim()}`);
+  });
+
+  backendProcess.on('error', (err) => {
+    console.error('[Backend] Failed to start:', err.message);
+    backendRunning = false;
+    backendProcess = null;
+    if (typeof updateTrayMenu === 'function') updateTrayMenu();
+  });
+
+  backendProcess.on('exit', (code, signal) => {
+    console.log(`[Backend] Exited (code=${code}, signal=${signal})`);
+    backendRunning = false;
+    backendProcess = null;
+    if (typeof updateTrayMenu === 'function') updateTrayMenu();
+  });
+
+  waitForBackend();
+  if (typeof updateTrayMenu === 'function') updateTrayMenu();
+}
+
+function stopBackend() {
+  if (!backendProcess) {
+    console.log('[Backend] Not running');
+    return;
+  }
+
+  console.log('[Backend] Stopping server...');
+
+  if (process.platform === 'win32') {
+    try {
+      require('child_process').execSync(
+        `taskkill /PID ${backendProcess.pid} /T /F`,
+        { stdio: 'ignore', timeout: 5000 }
+      );
+    } catch (_) {
+      backendProcess.kill('SIGTERM');
+    }
+  } else {
+    backendProcess.kill('SIGTERM');
+  }
+
+  backendRunning = false;
+  backendProcess = null;
+  if (typeof updateTrayMenu === 'function') updateTrayMenu();
+}
+
+function restartBackend() {
+  stopBackend();
+  setTimeout(startBackend, 1500);
+}
+
+async function waitForBackend() {
+  const maxAttempts = 30;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await apiCall('/health');
+      console.log('[Backend] Server is ready');
+      if (typeof updateTrayMenu === 'function') updateTrayMenu();
+      return;
+    } catch (_) {
+      // Server not ready yet
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  console.warn('[Backend] Server did not become ready within timeout');
+  if (typeof updateTrayMenu === 'function') updateTrayMenu();
 }
 
 // ─────────────────────────────────────────────
@@ -200,6 +303,7 @@ async function checkReminders() {
   } catch (err) {
     // Silently fail — server might be offline
   }
+  if (tray) updateTrayMenu();
 }
 
 // ─────────────────────────────────────────────
@@ -220,6 +324,56 @@ function showDesktopNotification(title, body, data = {}) {
   });
 
   notification.show();
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+
+  const backendStatus = backendRunning
+    ? '✅ Backend Running'
+    : '❌ Backend Stopped';
+
+  const template = [
+    {
+      label: '🔍 Quick Search & Capture',
+      click: () => createOverlayWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: backendStatus,
+      enabled: false,
+    },
+    {
+      label: backendRunning ? '🔄 Restart Backend' : '▶ Start Backend',
+      click: () => {
+        if (backendRunning) {
+          restartBackend();
+        } else {
+          startBackend();
+        }
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '📊 Open Dashboard',
+      click: () => require('electron').shell.openExternal(`${getEffectiveApiBase()}/dashboard`),
+    },
+    { type: 'separator' },
+    {
+      label: 'Check Reminders Now',
+      click: () => checkReminders(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit easy-rewind',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    },
+  ];
+
+  tray.setContextMenu(Menu.buildFromTemplate(template));
 }
 
 // ─────────────────────────────────────────────
@@ -253,32 +407,7 @@ function createTray() {
   tray = new Tray(trayIcon);
   tray.setToolTip('easy-rewind — Press Ctrl+Shift+Space to open');
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: '🔍 Quick Search & Capture',
-      click: () => createOverlayWindow(),
-    },
-    { type: 'separator' },
-    {
-      label: '📊 Open Dashboard',
-      click: () => require('electron').shell.openExternal(`${getEffectiveApiBase()}/dashboard`),
-    },
-    { type: 'separator' },
-    {
-      label: 'Check Reminders Now',
-      click: () => checkReminders(),
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit easy-rewind',
-      click: () => {
-        app.isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
-
-  tray.setContextMenu(contextMenu);
+  updateTrayMenu();
 
   // Double-click tray → open overlay
   tray.on('double-click', () => {
@@ -291,6 +420,9 @@ function createTray() {
 // ─────────────────────────────────────────────
 app.whenReady().then(() => {
   loadDesktopSettings();
+
+  // Auto-start the backend server
+  startBackend();
   // Register global shortcut
   const shortcut = globalShortcut.register('Ctrl+Shift+Space', () => {
     toggleOverlay();
@@ -374,4 +506,5 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (reminderInterval) clearInterval(reminderInterval);
+  stopBackend();
 });

@@ -128,6 +128,18 @@ const els = {
   // Footer
   serverStatusDot: $('server-status-dot'),
   serverStatusText: $('server-status-text'),
+  startServerBtn: $('start-server-btn'),
+
+  // API Key bar
+  apiKeyBar: $('api-key-bar'),
+  apiKeyHeader: $('api-key-header'),
+  apiKeyIndicator: $('api-key-indicator'),
+  apiKeyStatusText: $('api-key-status-text'),
+  apiKeyToggleBtn: $('api-key-toggle-btn'),
+  apiKeyBody: $('api-key-body'),
+  apiKeyInput: $('api-key-input'),
+  apiKeyVisibilityBtn: $('api-key-visibility-btn'),
+  apiKeySaveStatus: $('api-key-save-status'),
 
   // Header
   openDashboardBtn: $('open-dashboard-btn'),
@@ -271,9 +283,120 @@ async function checkServerHealth() {
     const data = await apiCall('/health');
     els.serverStatusDot.classList.add('online');
     els.serverStatusText.textContent = 'Server online';
+    if (els.startServerBtn) els.startServerBtn.style.display = 'none';
+    // Refresh API key indicator when server comes back (may have loaded .env key)
+    loadApiKeyStatus();
+    return true;
   } catch {
     els.serverStatusDot.classList.remove('online');
     els.serverStatusText.textContent = 'Server offline';
+    if (els.startServerBtn) els.startServerBtn.style.display = 'inline-block';
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────
+// API KEY MANAGEMENT (inline bar)
+// ─────────────────────────────────────────────
+
+function getApiBaseUrl() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ easy_rewind_api_base: DEFAULT_API_BASE }, (result) => {
+      resolve((result.easy_rewind_api_base || DEFAULT_API_BASE).replace(/\/+$/, ''));
+    });
+  });
+}
+
+function loadApiKeyStatus() {
+  chrome.storage.local.get({ easy_rewind_api_key: '' }, (result) => {
+    const key = result.easy_rewind_api_key || '';
+    if (els.apiKeyInput) els.apiKeyInput.value = key;
+    updateApiKeyIndicator(key);
+  });
+}
+
+function updateApiKeyIndicator(key) {
+  const hasKey = !!key && key.length > 10;
+  if (els.apiKeyIndicator) {
+    els.apiKeyIndicator.className = 'api-key-dot ' + (hasKey ? 'configured' : 'missing');
+  }
+  if (els.apiKeyStatusText) {
+    els.apiKeyStatusText.textContent = hasKey
+      ? 'Configured (' + key.slice(0, 8) + '...)'
+      : 'Not configured';
+  }
+}
+
+let apiKeySaveTimer = null;
+function handleApiKeyChange() {
+  const key = (els.apiKeyInput.value || '').trim();
+  if (apiKeySaveTimer) clearTimeout(apiKeySaveTimer);
+
+  if (els.apiKeySaveStatus) {
+    els.apiKeySaveStatus.textContent = '⏳ Saving...';
+    els.apiKeySaveStatus.className = 'saving';
+  }
+
+  apiKeySaveTimer = setTimeout(async () => {
+    try {
+      // 1. Save to chrome.storage.local
+      await new Promise((resolve) => {
+        chrome.storage.local.set({ easy_rewind_api_key: key }, resolve);
+      });
+
+      // 2. Sync to backend (best-effort)
+      const base = await getApiBaseUrl();
+      fetch(`${base}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        body: JSON.stringify({ gemini_api_key: key || null }),
+      }).catch(() => {});
+
+      // 3. Update indicator
+      updateApiKeyIndicator(key);
+
+      // 4. Sync the settings modal field if it exists
+      const settingsField = $('settings-api-key');
+      if (settingsField) settingsField.value = key;
+
+      if (els.apiKeySaveStatus) {
+        els.apiKeySaveStatus.textContent = '✅ Saved';
+        els.apiKeySaveStatus.className = 'saved';
+        setTimeout(() => {
+          if (els.apiKeySaveStatus && els.apiKeySaveStatus.classList.contains('saved')) {
+            els.apiKeySaveStatus.textContent = '';
+            els.apiKeySaveStatus.className = '';
+          }
+        }, 2000);
+      }
+    } catch (err) {
+      if (els.apiKeySaveStatus) {
+        els.apiKeySaveStatus.textContent = '❌ Save failed';
+        els.apiKeySaveStatus.className = 'error';
+      }
+    }
+  }, 600);
+}
+
+function toggleApiKeyVisibility() {
+  if (!els.apiKeyInput) return;
+  if (els.apiKeyInput.type === 'password') {
+    els.apiKeyInput.type = 'text';
+    if (els.apiKeyVisibilityBtn) els.apiKeyVisibilityBtn.textContent = '🙈';
+  } else {
+    els.apiKeyInput.type = 'password';
+    if (els.apiKeyVisibilityBtn) els.apiKeyVisibilityBtn.textContent = '👁️';
+  }
+}
+
+function toggleApiKeyBody() {
+  if (!els.apiKeyBody) return;
+  const isVisible = els.apiKeyBody.style.display !== 'none';
+  els.apiKeyBody.style.display = isVisible ? 'none' : 'block';
+  if (!isVisible && els.apiKeyInput) {
+    els.apiKeyInput.focus();
+    const len = els.apiKeyInput.value.length;
+    els.apiKeyInput.setSelectionRange(len, len);
   }
 }
 
@@ -298,6 +421,10 @@ async function init() {
   }
 
   checkServerHealth();
+  loadApiKeyStatus();
+
+  // Poll server health every 30 seconds
+  setInterval(checkServerHealth, 30000);
 
   // Check if we were asked to open a specific tab
   chrome.storage.local.get(['easy_rewind_open_tab'], (result) => {
@@ -317,13 +444,17 @@ async function init() {
   }, (result) => {
     if (result.easy_rewind_api_key || result.easy_rewind_ai_model !== 'gemini-2.5-flash') {
       const base = (result.easy_rewind_api_base || DEFAULT_API_BASE).replace(/\/+$/, '');
+      const body = {};
+      if (result.easy_rewind_api_key) {
+        body.gemini_api_key = result.easy_rewind_api_key;
+      }
+      if (result.easy_rewind_ai_model) {
+        body.ai_model = result.easy_rewind_ai_model;
+      }
       fetch(`${base}/api/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-        body: JSON.stringify({
-          gemini_api_key: result.easy_rewind_api_key || null,
-          ai_model: result.easy_rewind_ai_model,
-        }),
+        body: JSON.stringify(body),
       }).catch(() => {});
     }
   });
@@ -1420,6 +1551,60 @@ async function openDashboard() {
 els.openDashboardBtn.addEventListener('click', (e) => { e.preventDefault(); openDashboard(); });
 els.footerDashboardLink.addEventListener('click', (e) => { e.preventDefault(); openDashboard(); });
 
+// ═══ API Key Bar Events ═══
+els.apiKeyHeader?.addEventListener('click', (e) => {
+  if (e.target.closest('button')) return;
+  toggleApiKeyBody();
+});
+els.apiKeyToggleBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleApiKeyBody();
+});
+els.apiKeyInput?.addEventListener('input', handleApiKeyChange);
+els.apiKeyVisibilityBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleApiKeyVisibility();
+});
+
+// ═══ Start Server Button ═══
+els.startServerBtn?.addEventListener('click', async () => {
+  if (!els.startServerBtn) return;
+  els.startServerBtn.disabled = true;
+  els.startServerBtn.textContent = '⏳ Trying...';
+
+  showStatus(els.searchStatus,
+    '🖥️ Starting server... If this takes a while, double-click start-backend.bat in the easy-rewind folder.',
+    'loading');
+
+  // Retry health check for 15 seconds (maybe the desktop app just started the backend)
+  let serverStarted = false;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      const base = await getApiBaseUrl();
+      const resp = await fetch(`${base}/api/health`);
+      if (resp.ok) {
+        serverStarted = true;
+        break;
+      }
+    } catch (_) {}
+  }
+
+  if (serverStarted) {
+    showStatus(els.searchStatus, '✅ Server connected!', 'success', 3000);
+    checkServerHealth();
+  } else {
+    showStatus(els.searchStatus,
+      '⚠️ Could not reach server. Run start-backend.bat from the easy-rewind folder, or launch the easy-rewind Desktop app.',
+      'error', 8000);
+  }
+
+  if (els.startServerBtn) {
+    els.startServerBtn.textContent = '▶ Start Server';
+    els.startServerBtn.disabled = false;
+  }
+});
+
 // ═════════════════════════════════════════════
 // SETTINGS
 // ═════════════════════════════════════════════
@@ -1502,6 +1687,8 @@ function saveSettings() {
         settings: autoCaptureSettings,
       });
     } catch (_) {}
+    // Refresh the inline API key indicator after modal save
+    loadApiKeyStatus();
     showStatus(els.searchStatus, '✅ Settings saved!', 'success', 3000);
     closeSettings();
   });
