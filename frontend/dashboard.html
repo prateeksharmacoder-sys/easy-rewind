@@ -580,6 +580,43 @@
     .highlight-color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 
     /* ══════════════════════════════════════════════
+       MEMORY GRID
+    ══════════════════════════════════════════════ */
+    .memory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+    .memory-card {
+      background: var(--bg-card); border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg); padding: 18px 20px; transition: var(--transition-slow);
+      animation: cardIn 0.3s ease both; display: flex; flex-direction: column; gap: 8px;
+    }
+    .memory-card:hover { border-color: var(--border-hover); }
+    .memory-source {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: var(--blue-soft); border: 1px solid var(--accent-border);
+      border-radius: 14px; padding: 2px 10px; font-size: 10px; font-weight: 600;
+      color: var(--accent); width: fit-content; text-transform: uppercase;
+    }
+    .memory-title { font-size: 14px; font-weight: 600; line-height: 1.3; }
+    .memory-url { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .memory-summary { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+    .memory-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+    .memory-tag {
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+      border-radius: 10px; padding: 1px 8px; font-size: 10px; color: var(--text-muted);
+    }
+    .memory-footer {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-top: auto; padding-top: 6px; border-top: 1px solid var(--border-subtle);
+    }
+    .memory-footer-left { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+    .memory-score {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 600;
+    }
+    .memory-score-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+    .memory-actions { display: flex; gap: 4px; opacity: 0; transition: var(--transition); }
+    .memory-card:hover .memory-actions { opacity: 1; }
+
+    /* ══════════════════════════════════════════════
        KG
     ══════════════════════════════════════════════ */
     .kg-layout { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -760,6 +797,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
       Bookmarks
     </button>
+    <button class="dash-tab" data-tab="memory" role="tab" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+      Memory
+    </button>
     <button class="dash-tab" data-tab="notes" role="tab" aria-selected="false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Notes
@@ -787,6 +828,11 @@
     <div class="skeleton"><div class="sk-line short"></div><div class="sk-line med"></div><div class="sk-line full"></div></div>
     <div class="skeleton"><div class="sk-line short"></div><div class="sk-line med"></div><div class="sk-line full"></div></div>
     <div class="skeleton"><div class="sk-line short"></div><div class="sk-line med"></div><div class="sk-line full"></div></div>
+  </main>
+
+  <!-- Memory panel -->
+  <main id="memory-container" class="content-panel" aria-label="Memory" data-panel="memory" style="display:none;">
+    <div class="memory-grid" id="memory-grid"></div>
   </main>
 
   <!-- Notes panel -->
@@ -1270,10 +1316,11 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!D.deleteModal.clas
 
 const D2 = {
   notesGrid:$('notes-grid'), researchGrid:$('research-grid'), highlightsGrid:$('highlights-grid'),
+  memoryGrid:$('memory-grid'),
   dashTabs:document.querySelectorAll('.dash-tab'),
 };
 
-let notesLoaded=false, researchLoaded=false, highlightsLoaded=false, kgLoaded=false, digestLoaded=false;
+let notesLoaded=false, memoryLoaded=false, researchLoaded=false, highlightsLoaded=false, kgLoaded=false, digestLoaded=false;
 
 D2.dashTabs.forEach(tab=>{
   tab.addEventListener('click',()=>{
@@ -1283,6 +1330,7 @@ D2.dashTabs.forEach(tab=>{
     const target=document.querySelector(`[data-panel="${tab.dataset.tab}"]`);
     if(target)target.classList.add('active-panel');
     if(tab.dataset.tab==='notes') loadNotes();
+    if(tab.dataset.tab==='memory') loadMemory();
     if(tab.dataset.tab==='research') loadResearch();
     if(tab.dataset.tab==='highlights') loadHighlights();
     if(tab.dataset.tab==='knowledge-graph'){loadKG();populateConnections();}
@@ -1328,6 +1376,46 @@ async function loadResearch(){
       btn.addEventListener('click',()=>{const r=btn.closest('.research-card').querySelector('.research-result');if(r){r.classList.toggle('visible');btn.textContent=r.classList.contains('visible')?'Hide Analysis':'View Analysis';}});
     });
   }catch(err){D2.researchGrid.innerHTML=`<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">${icon('alert')}</div><div class="empty-title">Failed</div><div class="empty-text">${esc(err.message)}</div></div>`;}
+}
+
+// ── Memory ──
+async function loadMemory(){
+  if(memoryLoaded)return; memoryLoaded=true;
+  D2.memoryGrid.innerHTML=`<div class="empty-state" style="grid-column:1/-1;"><div class="empty-title">Loading...</div></div>`;
+  try{
+    const data=await apiCall('/items?limit=100');
+    const items=data.items||[];
+    if(!items.length){D2.memoryGrid.innerHTML='<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">'+icon('tag')+'</div><div class="empty-title">No memories yet</div><div class="empty-text">Auto-captured pages, AI summaries, and saved items appear here. Save a page with "Research Later" or browse the web with auto-capture enabled.</div></div>';return;}
+    D2.memoryGrid.innerHTML=items.map((item,i)=>{
+      const tags=(item.tags||'').split(',').filter(Boolean);
+      const score=parseFloat(item.memory_score)||0;
+      const scoreColor=score>=0.7?'var(--green)':score>=0.4?'var(--amber)':'var(--text-muted)';
+      const sourceType=(item.source_type||'web').toUpperCase();
+      const sourceColors={YOUTUBE:'var(--red)',GITHUB:'var(--green)',DOCS:'var(--blue)',BLOG:'var(--accent)',NEWS:'var(--amber)'};
+      const sourceColor=sourceColors[sourceType]||'var(--accent)';
+      return `<div class="memory-card" style="animation-delay:${Math.min(i*30,300)}ms">
+        <div class="memory-source" style="border-color:${sourceColor}40;color:${sourceColor};background:rgba(${sourceType==='YOUTUBE'?'239,68,68':sourceType==='GITHUB'?'34,197,94':sourceType==='NEWS'?'234,179,8':'59,130,246'},0.08);">${esc(sourceType)}</div>
+        <div class="memory-title">${esc(item.title||'Untitled').slice(0,80)}</div>
+        ${item.url?`<div class="memory-url">${esc(trunc(item.url,70))}</div>`:''}
+        ${item.summary?`<div class="memory-summary">${esc(trunc(item.summary,250))}</div>`:item.ai_summary?`<div class="memory-summary">${esc(trunc(item.ai_summary,250))}</div>`:''}
+        ${tags.length?`<div class="memory-tags">${tags.slice(0,8).map(t=>`<span class="memory-tag">${esc(t)}</span>`).join('')}</div>`:''}
+        <div class="memory-footer">
+          <div class="memory-footer-left">
+            <div class="memory-score"><span class="memory-score-dot" style="background:${scoreColor};"></span>${(score*100).toFixed(0)}%</div>
+            <span>${relTime(item.created_at)}</span>
+          </div>
+          <div class="memory-actions">
+            ${item.url?`<button class="bm-action open-memory" data-url="${esc(item.url)}">${icon('external')} Open</button>`:''}
+            <button class="bm-action danger del-memory" data-id="${item.id}">${icon('trash')}</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+    D2.memoryGrid.querySelectorAll('.open-memory').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();window.open(btn.dataset.url,'_blank');});});
+    D2.memoryGrid.querySelectorAll('.del-memory').forEach(btn=>{
+      btn.addEventListener('click',async e=>{e.stopPropagation();const id=btn.dataset.id;if(!confirm('Delete this memory?'))return;try{await apiCall('/items/'+id,{method:'DELETE'});btn.closest('.memory-card').remove();showToast('Memory deleted','success');}catch(err){showToast('Delete failed','error');}});
+    });
+  }catch(err){D2.memoryGrid.innerHTML=`<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">${icon('alert')}</div><div class="empty-title">Failed</div><div class="empty-text">${esc(err.message)}</div></div>`;}
 }
 
 // ── Highlights ──

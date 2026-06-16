@@ -40,7 +40,8 @@
     "tabs",
     "contextMenus",
     "notifications",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
 
   "host_permissions": [

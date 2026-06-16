@@ -4,7 +4,7 @@
  * Handles:
  * - Extension installation & user ID generation
  * - Context menu (right-click → lookup)
- * - Tab-close reminder detection (Problem #4)
+ * - Tab-close reminder detection
  * - Alarm-based reminder checking
  * - Desktop notifications for due reminders
  * - Quick note capture via keyboard shortcut
@@ -16,6 +16,12 @@
 // ─────────────────────────────────────────────
 const DEFAULT_API_BASE = 'http://localhost:5000';
 const REMINDER_CHECK_INTERVAL = 2; // minutes
+
+// In-memory store of prompted tab IDs to avoid re-notification after
+// service-worker restart. On start we first check chrome.storage.session
+// for surviving engagement state.
+let promptedTabs = new Set();
+let suppressedTabs = new Set();
 
 function getApiUrl(path) {
   return new Promise((resolve) => {
@@ -112,6 +118,24 @@ async function loadAutoCaptureSettings() {
   } catch (_) {}
 }
 
+// Persist prompted/suppressed state across service-worker restarts
+async function persistEngagementState() {
+  try {
+    await chrome.storage.session.set({
+      easy_rewind_prompted_tabs: [...promptedTabs],
+      easy_rewind_suppressed_tabs: [...suppressedTabs],
+    });
+  } catch (_) {}
+}
+
+async function restoreEngagementState() {
+  try {
+    const result = await chrome.storage.session.get(['easy_rewind_prompted_tabs', 'easy_rewind_suppressed_tabs']);
+    if (result.easy_rewind_prompted_tabs) promptedTabs = new Set(result.easy_rewind_prompted_tabs);
+    if (result.easy_rewind_suppressed_tabs) suppressedTabs = new Set(result.easy_rewind_suppressed_tabs);
+  } catch (_) {}
+}
+
 // Handle engagement heartbeats from content scripts
 function handleEngagementUpdate(tabId, data) {
   if (!autoCaptureSettings.enabled) return;
@@ -122,14 +146,18 @@ function handleEngagementUpdate(tabId, data) {
   existing.engagement = data;
   engagementState.set(tabId, existing);
 
-  // Don't re-prompt or re-notify if already done
-  if (existing.prompted || existing.suppressed) return;
+  // Don't re-prompt or re-notify if already done (checks both in-memory and persisted set)
+  if (existing.prompted || existing.suppressed || promptedTabs.has(tabId) || suppressedTabs.has(tabId)) return;
 
   // Check threshold
+  // If promptDelayMs is set, only prompt after the user has been engaged for at least that long
+  // past the threshold crossing
   if (data.score >= autoCaptureSettings.scoreThreshold && data.elapsed_min >= autoCaptureSettings.minMinutes) {
     existing.prompted = true;
     existing.promptedAt = now;
     engagementState.set(tabId, existing);
+    promptedTabs.add(tabId);
+    persistEngagementState();
     fireAutoCapturePrompt(tabId, data);
   }
 }
@@ -202,6 +230,8 @@ async function handleAutoCaptureNotification(notificationId, buttonIndex) {
       state.suppressed = true;
       engagementState.set(tabId, state);
     }
+    suppressedTabs.add(tabId);
+    persistEngagementState();
     // Also clear the pending data
     await chrome.storage.local.remove('easy_rewind_pending_auto_save');
   }
@@ -404,6 +434,9 @@ function trackTabForReminder(tabId, noteData) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   // Clean up engagement state for closed tabs
   engagementState.delete(tabId);
+  promptedTabs.delete(tabId);
+  suppressedTabs.delete(tabId);
+  persistEngagementState();
 
   // Check tab-close reminders
   chrome.storage.local.get({ easy_rewind_tracked_tabs: {} }, (result) => {
@@ -442,7 +475,43 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
     return;
   }
 
-  // Default notification handling
+  // Reminder notification (prefix: reminder-)
+  if (notificationId.startsWith('reminder-')) {
+    const parts = notificationId.split('-');
+    const reminderId = parseInt(parts[1]);
+    if (buttonIndex === 0) {
+      // ✓ Mark Done — dismiss the reminder
+      if (reminderId) {
+        chrome.storage.local.get({ easy_rewind_user_id: '' }, (result) => {
+          getApiUrl(`/reminders/${reminderId}`).then(url => {
+            fetch(url, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', 'x-user-id': result.easy_rewind_user_id || 'anonymous' },
+              body: JSON.stringify({ dismissed: true }),
+            }).catch(() => {});
+          });
+        });
+      }
+    } else if (buttonIndex === 1) {
+      // ⏱ Snooze 5 min — reschedule
+      if (reminderId) {
+        const snoozeTime = new Date(Date.now() + 5 * 60000).toISOString();
+        chrome.storage.local.get({ easy_rewind_user_id: '' }, (result) => {
+          getApiUrl(`/reminders/${reminderId}`).then(url => {
+            fetch(url, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', 'x-user-id': result.easy_rewind_user_id || 'anonymous' },
+              body: JSON.stringify({ reminded: false, remind_at: snoozeTime }),
+            }).catch(() => {});
+          });
+        });
+      }
+    }
+    chrome.notifications.clear(notificationId);
+    return;
+  }
+
+  // Default notification handling (legacy)
   if (buttonIndex === 0) {
     chrome.storage.local.set({ easy_rewind_open_tab: 'notes' });
     chrome.action.openPopup();
@@ -458,6 +527,10 @@ chrome.notifications.onClicked.addListener((notificationId) => {
       chrome.storage.local.set({ easy_rewind_open_tab: 'save' });
       chrome.action.openPopup();
     }
+  } else if (notificationId.startsWith('reminder-')) {
+    // Clicking a reminder notification body — open popup to notes tab
+    chrome.storage.local.set({ easy_rewind_open_tab: 'notes' });
+    chrome.action.openPopup();
   } else {
     chrome.storage.local.set({ easy_rewind_open_tab: 'notes' });
     chrome.action.openPopup();
@@ -483,19 +556,21 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 async function checkDueReminders() {
   try {
     const { easy_rewind_user_id: userId } = await chrome.storage.local.get('easy_rewind_user_id');
-    if (!userId) return;
+    if (!userId) { console.log('[Reminder Check] No userId in storage'); return; }
 
     const url = await getApiUrl('/reminders?due=true&limit=10');
     const response = await fetch(url, {
       headers: { 'x-user-id': userId },
     });
 
-    if (!response.ok) return;
+    if (!response.ok) { console.log('[Reminder Check] API returned', response.status); return; }
     const data = await response.json();
 
     if (data.reminders && data.reminders.length > 0) {
+      console.log('[Reminder Check] Firing', data.reminders.length, 'notification(s)');
       for (const reminder of data.reminders) {
-        chrome.notifications.create({
+        const notifId = `reminder-${reminder.id}-${Date.now()}`;
+        chrome.notifications.create(notifId, {
           type: 'basic',
           iconUrl: 'icons/icon128.png',
           title: reminder.title || '⏰ Reminder',
@@ -514,7 +589,7 @@ async function checkDueReminders() {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
           body: JSON.stringify({ reminded: true }),
-        });
+        }).catch(() => {});
       }
     }
   } catch (err) {
@@ -634,17 +709,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'PING') {
     sendResponse({ status: 'alive' });
   }
+
+  if (message.type === 'CHECK_DUE_REMINDERS') {
+    checkDueReminders();
+    sendResponse({ checked: true });
+    return true;
+  }
 });
 
 // ─────────────────────────────────────────────
 // INIT: load settings on startup
 // ─────────────────────────────────────────────
 loadAutoCaptureSettings();
+restoreEngagementState();
 
 // Check server health on background start and set badge
 updateServerBadge();
 
-// Set up engagement cleanup alarm
+// Ensure periodic alarms are registered (also created in onInstalled,
+// but this covers service-worker restart edge cases)
+chrome.alarms.create('check-reminders', { periodInMinutes: REMINDER_CHECK_INTERVAL });
+chrome.alarms.create('check-server-health', { periodInMinutes: 2 });
 chrome.alarms.create('cleanup-engagement', {
   periodInMinutes: 15,
 });

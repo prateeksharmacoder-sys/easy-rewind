@@ -48,6 +48,19 @@ router.get('/health', (req, res) => {
 router.post('/session', (req, res) => {
   const { client_id, device, client_type } = req.body || {};
   const userId = config.profileUserId || 'anonymous';
+
+  // Migrate any data saved under 'anonymous' to the canonical user ID,
+  // so items saved by the extension before session resolution appear in the dashboard.
+  if (userId !== 'anonymous') {
+    try {
+      const database = getDb();
+      const tables = ['bookmarks', 'items', 'notes', 'reminders', 'highlights', 'research_queue', 'search_log'];
+      for (const table of tables) {
+        database.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = 'anonymous'`).run(userId);
+      }
+    } catch (_) {}
+  }
+
   return res.json({
     user_id: userId,
     client_id: sanitize(client_id || '', 120),
@@ -244,6 +257,29 @@ Format using plain text with markdown headers.`;
       )
       .run(analysis, id);
 
+    // Also save to items table for future AI summary access
+    try {
+      const sourceType = 'web';
+      const existingItem = database.prepare('SELECT id FROM items WHERE url = ? AND user_id = ?').get(url, userId);
+      if (existingItem) {
+        database
+          .prepare("UPDATE items SET ai_summary = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z') WHERE id = ?")
+          .run(analysis, existingItem.id);
+        console.log('[Research] Updated item', existingItem.id, 'with AI summary');
+      } else {
+        database
+          .prepare(
+            `INSERT INTO items (user_id, url, title, content, ai_summary, tags, source_type, memory_score, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, '', ?, 1.0, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))`
+          )
+          .run(userId, sanitize(url, 2000), sanitize(title || url, 500), (pageContent || '').slice(0, 2000), analysis, sourceType);
+        const itemId = database.prepare('SELECT last_insert_rowid() as id').get().id;
+        console.log('[Research] Created item', itemId, 'with AI summary');
+      }
+    } catch (itemErr) {
+      console.warn('[Research] Failed to save to items:', itemErr.message);
+    }
+
     database
       .prepare(
         `
@@ -287,6 +323,40 @@ router.get('/research', (req, res) => {
   } catch (err) {
     console.error('[Get Research Error]', err.message);
     return res.status(500).json({ error: 'Failed to load research.' });
+  }
+});
+
+// ═════════════════════════════════════════════
+// PAGE FETCH PROXY (for popup summarize fallback)
+// ═════════════════════════════════════════════
+
+// GET /api/fetch-page-content — Fetch a page and return its text content
+router.get('/fetch-page-content', async (req, res) => {
+  const url = req.query.url;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'URL parameter is required.' });
+  }
+  try {
+    new URL(url);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL.' });
+  }
+  try {
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; easy-rewind/1.0)' },
+    });
+    const html = response.data;
+    const text = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&[^;]+;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return res.json({ url, content: text.slice(0, 8000) });
+  } catch (err) {
+    return res.status(502).json({ error: `Failed to fetch page: ${err.message}` });
   }
 });
 

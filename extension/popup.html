@@ -311,6 +311,15 @@
     .tbl-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:var(--transition);display:flex;align-items:center;}
     .tbl-btn:hover{color:var(--red);background:var(--red-soft);}
     .tbl-btn .icon{width:14px;height:14px;}
+    .research-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:var(--transition);display:flex;align-items:center;}
+    .research-btn:hover{color:var(--accent);background:var(--accent-soft);}
+    .research-btn .icon{width:14px;height:14px;}
+    .research-btn:disabled{opacity:0.5;cursor:default;}
+    .bm-analysis{margin-top:6px;padding:8px;border-radius:var(--radius-sm);background:var(--accent-soft);border:1px solid var(--border-default);font-size:10px;line-height:1.6;color:var(--text-secondary);}
+    .analysis-summary{white-space:pre-line;}
+    .analysis-toggle{background:none;border:none;color:var(--accent);cursor:pointer;font-size:10px;padding:3px 0;display:block;margin-top:3px;}
+    .analysis-toggle:hover{text-decoration:underline;}
+    .analysis-full{white-space:pre-wrap;font-size:10px;line-height:1.6;max-height:300px;overflow-y:auto;margin-top:6px;padding-top:6px;border-top:1px solid var(--border-default);}
     .done-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:var(--transition);display:flex;align-items:center;}
     .done-btn:hover{color:var(--green);background:var(--green-soft);}
     .done-btn.done{color:var(--green);}
@@ -729,6 +738,10 @@
         <div class="stat-val" id="total-highlights-stat">—</div>
         <div class="stat-lbl">Highlights</div>
       </div>
+      <div class="stat-chip">
+        <div class="stat-val" id="total-reminders-stat">—</div>
+        <div class="stat-lbl">Reminders</div>
+      </div>
     </div>
 
     <div class="search-row">
@@ -891,6 +904,93 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" id="settings-cancel-btn">Cancel</button>
         <button class="btn btn-primary" id="settings-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SUMMARY POPUP MODAL
+  ══════════════════════════════════════════ -->
+  <div class="modal-over" id="summary-modal-overlay">
+    <div class="modal" style="max-width:400px;padding:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div style="flex:1;min-width:0;">
+          <div class="info-label" id="summary-modal-badge" style="margin-bottom:2px;">Bookmark</div>
+          <div class="list-item-title" id="summary-modal-title" style="font-size:13px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">Title</div>
+          <div class="info-url" id="summary-modal-url" style="font-size:10px;margin-top:2px;word-break:break-all;">URL</div>
+        </div>
+        <button class="modal-close" id="summary-modal-close-btn" style="flex-shrink:0;margin-left:8px;">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <!-- Action buttons row -->
+      <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-xs" id="summary-open-url-btn" style="flex:1;min-width:60px;padding:6px 8px;font-size:10px;">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          Open
+        </button>
+        <button class="btn btn-xs" id="summary-ai-btn" style="flex:1;min-width:60px;padding:6px 8px;font-size:10px;background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border-default);">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          AI Summary
+        </button>
+        <button class="btn btn-xs" id="summary-research-btn" style="flex:1;min-width:60px;padding:6px 8px;font-size:10px;background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border-default);">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Research
+        </button>
+        <button class="btn btn-xs tbl-btn" id="summary-delete-btn" style="flex:none;padding:6px 8px;font-size:10px;background:var(--red-soft);color:var(--red);border:none;">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+
+      <!-- Tabs: Summary / Research -->
+      <div style="display:flex;gap:4px;margin-bottom:8px;">
+        <button class="sub-tab active" id="summary-tab-summary" style="flex:1;padding:4px;font-size:10px;">Summary</button>
+        <button class="sub-tab" id="summary-tab-research" style="flex:1;padding:4px;font-size:10px;">Research</button>
+        <button class="sub-tab" id="summary-tab-notes" style="flex:1;padding:4px;font-size:10px;">Notes</button>
+      </div>
+
+      <!-- Summary content -->
+      <div id="summary-panel-summary">
+        <div id="summary-ai-content" style="font-size:11px;line-height:1.6;color:var(--text-secondary);max-height:240px;overflow-y:auto;padding:8px;background:var(--bg-input);border-radius:var(--radius-sm);border:1px solid var(--border-default);white-space:pre-wrap;">
+          <div class="empty" style="padding:12px 8px;">
+            <div class="empty-title" style="font-size:11px;">No AI summary yet</div>
+            <div class="empty-sub" style="font-size:10px;">Click the AI Summary button above to generate one</div>
+          </div>
+        </div>
+        <div id="summary-ai-loading" style="display:none;padding:12px;text-align:center;">
+          <span class="spinner" style="width:16px;height:16px;"></span>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Generating AI summary...</div>
+        </div>
+      </div>
+
+      <!-- Research content -->
+      <div id="summary-panel-research" style="display:none;">
+        <div id="summary-research-content" style="font-size:11px;line-height:1.6;color:var(--text-secondary);max-height:240px;overflow-y:auto;padding:8px;background:var(--bg-input);border-radius:var(--radius-sm);border:1px solid var(--border-default);white-space:pre-wrap;">
+          <div class="empty" style="padding:12px 8px;">
+            <div class="empty-title" style="font-size:11px;">No research yet</div>
+            <div class="empty-sub" style="font-size:10px;">Click the Research button to analyze this page</div>
+          </div>
+        </div>
+        <div id="summary-research-loading" style="display:none;padding:12px;text-align:center;">
+          <span class="spinner" style="width:16px;height:16px;"></span>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Running AI research...</div>
+        </div>
+      </div>
+
+      <!-- Notes content -->
+      <div id="summary-panel-notes" style="display:none;">
+        <div id="summary-notes-content" style="font-size:11px;line-height:1.6;color:var(--text-secondary);max-height:240px;overflow-y:auto;padding:8px;background:var(--bg-input);border-radius:var(--radius-sm);border:1px solid var(--border-default);white-space:pre-wrap;">
+          <div class="empty" style="padding:12px 8px;">
+            <div class="empty-title" style="font-size:11px;">No notes for this item</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer info -->
+      <div id="summary-modal-footer" style="margin-top:8px;font-size:9px;color:var(--text-muted);display:flex;justify-content:space-between;align-items:center;">
+        <span id="summary-modal-date"></span>
+        <span id="summary-modal-status"></span>
       </div>
     </div>
   </div>

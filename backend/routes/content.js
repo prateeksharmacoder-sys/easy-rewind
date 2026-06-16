@@ -465,10 +465,10 @@ router.get('/reminders', (req, res) => {
   }
 });
 
-// PATCH /api/reminders/:id — Acknowledge/dismiss a reminder
+// PATCH /api/reminders/:id — Acknowledge/dismiss/snooze a reminder
 router.patch('/reminders/:id', (req, res) => {
   const { id } = req.params;
-  const { reminded, dismissed } = req.body;
+  const { reminded, dismissed, remind_at } = req.body;
   const user_id = getUserId(req);
 
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid reminder ID is required.' });
@@ -485,6 +485,15 @@ router.patch('/reminders/:id', (req, res) => {
     if (dismissed !== undefined) {
       sets.push('dismissed = ?');
       params.push(dismissed ? 1 : 0);
+    }
+    if (remind_at !== undefined) {
+      const normalized = normalizeDate(remind_at);
+      if (normalized) {
+        sets.push('remind_at = ?');
+        params.push(normalized);
+        // Reset reminded flag when rescheduling
+        sets.push('reminded = 0');
+      }
     }
 
     if (sets.length === 0) return res.status(400).json({ error: 'No fields to update.' });

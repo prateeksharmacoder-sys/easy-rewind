@@ -109,6 +109,7 @@ const els = {
   uniqueTopicsStat: $('unique-topics-stat'),
   totalResearchStat: $('total-research-stat'),
   totalHighlightsStat: $('total-highlights-stat'),
+  totalRemindersStat: $('total-reminders-stat'),
   historySubBm: $('history-sub-bm'),
   historySubResearch: $('history-sub-research'),
   historySubHighlights: $('history-sub-highlights'),
@@ -256,6 +257,8 @@ async function getCurrentPageInfo() {
   });
 }
 
+let prevServerOnline = false;
+
 async function checkServerHealth() {
   try {
     await apiCall('/health');
@@ -263,13 +266,24 @@ async function checkServerHealth() {
     if (els.serverStatusText) els.serverStatusText.textContent = 'Online';
     if (els.startServerBtn) els.startServerBtn.style.display = 'none';
     loadApiKeyStatus();
+    // Server just came online → check reminders now
+    if (!prevServerOnline) checkDueRemindersNow();
+    prevServerOnline = true;
     return true;
   } catch {
     if (els.serverStatusDot) els.serverStatusDot.classList.remove('online');
     if (els.serverStatusText) els.serverStatusText.textContent = 'Offline';
     if (els.startServerBtn) els.startServerBtn.style.display = 'inline-block';
+    prevServerOnline = false;
     return false;
   }
+}
+
+// Trigger background.js to check for due reminders right now
+async function checkDueRemindersNow() {
+  try {
+    chrome.runtime.sendMessage({ type: 'CHECK_DUE_REMINDERS' }).catch(() => {});
+  } catch (_) {}
 }
 
 // ─────────────────────────────────────────────
@@ -285,22 +299,41 @@ function getApiBaseUrl() {
 }
 
 function loadApiKeyStatus() {
-  chrome.storage.local.get({ easy_rewind_api_key: '' }, result => {
-    const key = result.easy_rewind_api_key || '';
-    if (els.apiKeyInput) els.apiKeyInput.value = key;
+  chrome.storage.local.get({ easy_rewind_api_key: '' }, async result => {
+    let key = result.easy_rewind_api_key || '';
+    // Also check what the backend reports — it may have a key from .env or settings modal
+    try {
+      const base = await getApiBaseUrl();
+      const resp = await fetch(`${base}/api/settings`, {
+        headers: { 'x-user-id': userId },
+      });
+      if (resp.ok) {
+        const settings = await resp.json();
+        if (settings.ai_configured && !key) {
+          // Backend has a key (from .env) but local storage doesn't — mark as configured
+          key = '__backend__';
+        }
+      }
+    } catch (_) {}
+    if (els.apiKeyInput) els.apiKeyInput.value = key === '__backend__' ? '' : key;
     updateApiKeyIndicator(key);
   });
 }
 
 function updateApiKeyIndicator(key) {
   const hasKey = !!key && key.length > 10;
+  const fromBackend = key === '__backend__';
   if (els.apiIndicator) {
-    els.apiIndicator.className = 'api-dot ' + (hasKey ? 'ok' : 'missing');
+    els.apiIndicator.className = 'api-dot ' + (hasKey || fromBackend ? 'ok' : 'missing');
   }
   if (els.apiStatusText) {
-    els.apiStatusText.textContent = hasKey
-      ? 'Configured (' + key.slice(0, 8) + '...)'
-      : 'Not configured';
+    if (fromBackend) {
+      els.apiStatusText.textContent = 'Configured (via .env)';
+    } else {
+      els.apiStatusText.textContent = hasKey
+        ? 'Configured (' + key.slice(0, 8) + '...)'
+        : 'Not configured';
+    }
   }
 }
 
@@ -316,11 +349,12 @@ function handleApiKeyChange() {
     try {
       await new Promise(resolve => chrome.storage.local.set({ easy_rewind_api_key: key }, resolve));
       const base = await getApiBaseUrl();
-      fetch(`${base}/api/settings`, {
+      const resp = await fetch(`${base}/api/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
         body: JSON.stringify({ gemini_api_key: key || null }),
-      }).catch(() => {});
+      });
+      if (!resp.ok) throw new Error('Backend rejected');
       updateApiKeyIndicator(key);
       const sf = $('settings-api-key');
       if (sf) sf.value = key;
@@ -332,14 +366,15 @@ function handleApiKeyChange() {
             els.apiSaveStatus.textContent = '';
             els.apiSaveStatus.className = 'api-save-status';
           }
-        }, 2000);
+        }, 3000);
       }
     } catch (err) {
       if (els.apiSaveStatus) {
-        els.apiSaveStatus.textContent = 'Save failed';
+        els.apiSaveStatus.textContent = 'Save failed — server unreachable';
         els.apiSaveStatus.className = 'api-save-status error';
       }
     }
+    apiKeySaveTimer = null;
   }, 600);
 }
 
@@ -383,6 +418,9 @@ async function init() {
   checkServerHealth();
   loadApiKeyStatus();
   setInterval(checkServerHealth, 30000);
+
+  // Check due reminders when popup opens (complements background alarm)
+  setTimeout(checkDueRemindersNow, 500);
 
   // Open specific tab from storage
   chrome.storage.local.get(['easy_rewind_open_tab'], result => {
@@ -638,10 +676,48 @@ async function handleSummarizePage() {
       try {
         const info = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_INFO' });
         if (info) { pageData = { url: info.url || tab.url, title: info.title || tab.title, description: info.description || '', textContent: info.textContent || '' }; }
-      } catch { throw new Error('Could not reach the page. Try reloading first.'); }
+      } catch {
+        // Content script not loaded — try scripting API as last resort
+        try {
+          const [result] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              const clone = document.body?.cloneNode(true);
+              if (!clone) return { textContent: '', description: '' };
+              clone.querySelectorAll('script,style,nav,footer,header,iframe,svg,noscript').forEach(el => el.remove());
+              return {
+                textContent: (clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 6000),
+                description: document.querySelector('meta[name="description"]')?.content || '',
+              };
+            },
+          });
+          if (result?.result) {
+            pageData.textContent = result.result.textContent || '';
+            pageData.description = result.result.description || '';
+          }
+        } catch (_) {}
+        if (!pageData.textContent) {
+          showStatus(els.searchStatus, 'Page content not reachable — using URL + title only.', 'loading');
+          // When content script isn't loaded, try to fetch page content directly
+          // (only works for same-origin or publicly accessible pages)
+          try {
+            const proxyUrl = await getFullApiUrl('/fetch-page-content?url=' + encodeURIComponent(tab.url || ''));
+            const proxyResp = await fetch(proxyUrl, { headers: { 'x-user-id': userId } }).catch(() => null);
+            if (proxyResp && proxyResp.ok) {
+              const proxyData = await proxyResp.json();
+              if (proxyData.content && proxyData.content.length > 20) {
+                pageData.textContent = proxyData.content.slice(0, 6000);
+              }
+            }
+          } catch (_) {}
+        }
+      }
     }
     const combined = [pageData.title && ('Title: ' + pageData.title), pageData.description && ('Description: ' + pageData.description), pageData.textContent].filter(Boolean).join('\n\n').trim();
-    if (!combined || combined.length < 20) throw new Error('Not enough content to summarize.');
+    if (!combined || combined.length < 20) {
+      if (!pageData.url && !pageData.title) throw new Error('Not enough content to summarize.');
+    }
+    const contentToSend = combined || (pageData.title ? 'Title: ' + pageData.title : '') + '\n\nURL: ' + pageData.url;
 
     let summary = null, source = null;
     if (window.ai?.summarizer || 'Summarizer' in window) {
@@ -720,18 +796,32 @@ async function handleSaveBookmark() {
     const body = { url: currentPageUrl, title: currentPageTitle || currentPageUrl, topic, notes };
     if (selectedBookmarkReminderMinutes) body.remind_in_minutes = selectedBookmarkReminderMinutes;
     const data = await apiCall('/bookmark', { method: 'POST', body: JSON.stringify(body) });
+    const parts = ['Saved!'];
     if (els.researchToggle.checked && data.bookmark) {
       showStatus(els.bookmarkStatus, 'Saving + queuing AI research...', 'loading');
+      // Also save to memory items so AI summary is immediately available
+      try {
+        await apiCall('/items', {
+          method: 'POST',
+          body: JSON.stringify({
+            url: currentPageUrl,
+            title: currentPageTitle || currentPageUrl,
+            content: notes || topic,
+            skip_embedding: false,
+            skip_summary: false,
+            skip_tags: false,
+          }),
+        }).catch(() => {});
+      } catch (_) {}
       await apiCall('/research', { method: 'POST', body: JSON.stringify({
         url: currentPageUrl, title: currentPageTitle || currentPageUrl, user_notes: notes || topic, auto_process: true,
       }) });
+      parts.push('Research queued!');
     }
-    const parts = ['Saved!'];
     if (selectedBookmarkReminderMinutes) {
       const m = selectedBookmarkReminderMinutes;
       parts.push('Reminder in ' + (m >= 1440 ? Math.floor(m / 1440) + 'd' : m >= 60 ? Math.floor(m / 60) + 'h' : m + 'min'));
     }
-    if (els.researchToggle.checked) parts.push('Research queued!');
     showStatus(els.bookmarkStatus, parts.join(' '), 'success', 4000);
     els.topicInput.value = '';
     els.notesInput.value = '';
@@ -904,30 +994,121 @@ els.historySubHighlights.addEventListener('click', () => {
   if (!highlightsLoaded) { loadHighlights(); highlightsLoaded = true; }
 });
 
+// Cache for bookmark → research lookup
+let currentBookmarks = [];
+const bookmarkResearchCache = {};
+
+function toggleBookmarkAnalysis(url) {
+  if (!url) return;
+  els.bookmarksList.querySelectorAll('.list-item').forEach(item => {
+    if (item.dataset.url === url) {
+      const toggleBtn = item.querySelector('.analysis-toggle');
+      const fullEl = item.querySelector('.analysis-full');
+      if (toggleBtn && fullEl) {
+        if (fullEl.style.display === 'none') {
+          fullEl.style.display = 'block';
+          toggleBtn.textContent = 'Hide full analysis';
+        } else {
+          fullEl.style.display = 'none';
+          toggleBtn.textContent = 'Show full analysis';
+        }
+      }
+    }
+  });
+}
+
+async function getBookmarkResearch(url) {
+  if (bookmarkResearchCache[url]) return bookmarkResearchCache[url];
+  try {
+    const data = await apiCall('/research?limit=50');
+    const match = (data.research || []).find(r => r.url === url);
+    if (match) bookmarkResearchCache[url] = match;
+    return match || null;
+  } catch { return null; }
+}
+
 function renderBookmarks(bookmarks) {
+  currentBookmarks = bookmarks || [];
   if (!bookmarks || !bookmarks.length) {
     els.bookmarksList.innerHTML = '<div class="empty"><div class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></div><div class="empty-title">No bookmarks found</div><div class="empty-sub">Save some bookmarks first</div></div>';
     return;
   }
-  els.bookmarksList.innerHTML = bookmarks.map(bm =>
-    '<div class="list-item" data-url="' + escapeHtml(bm.url) + '" data-id="' + bm.id + '">' +
+  els.bookmarksList.innerHTML = bookmarks.map(bm => {
+    const researchData = bookmarkResearchCache[bm.url];
+    const hasResearch = researchData && researchData.status === 'done' && researchData.research_result;
+    return '<div class="list-item" data-url="' + escapeHtml(bm.url) + '" data-id="' + bm.id + '">' +
       '<div class="list-topic">' + escapeHtml(bm.topic) + '</div>' +
       '<div class="list-item-title">' + escapeHtml(truncate(bm.title || bm.url, 60)) + '</div>' +
       (bm.notes ? '<div class="list-item-text" style="font-size:11px;font-style:italic;color:var(--text-secondary);margin-top:2px;">' + escapeHtml(truncate(bm.notes, 80)) + '</div>' : '') +
       '<div class="list-meta">' +
         '<span class="list-date">' + formatRelativeTime(bm.created_at) + '</span>' +
+        '<button class="research-btn" data-url="' + escapeHtml(bm.url) + '" data-title="' + escapeHtml(bm.title || '') + '" data-id="' + bm.id + '" title="' + (hasResearch ? 'View AI analysis' : 'Run AI research on this page') + '">' +
+          '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="' + (hasResearch ? 'color:var(--accent);' : '') + '"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+        '</button>' +
         '<button class="tbl-btn" data-id="' + bm.id + '">' +
           '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
         '</button>' +
       '</div>' +
-    '</div>'
-  ).join('');
+      (hasResearch ? '<div class="bm-analysis">' +
+        '<div class="analysis-summary">' + escapeHtml(truncate(researchData.research_result, 200)) + '</div>' +
+        '<button class="analysis-toggle" data-url="' + escapeHtml(bm.url) + '">Show full analysis</button>' +
+        '<div class="analysis-full" style="display:none;">' + escapeHtml(researchData.research_result) + '</div>' +
+      '</div>' : '') +
+    '</div>';
+  }).join('');
 
   els.bookmarksList.querySelectorAll('.list-item[data-url]').forEach(item => {
     item.addEventListener('click', e => {
-      if (e.target.closest('.tbl-btn')) return;
+      if (e.target.closest('.tbl-btn') || e.target.closest('.research-btn') || e.target.closest('.analysis-toggle')) return;
       const url = item.dataset.url;
       if (url) chrome.tabs.create({ url });
+    });
+  });
+  els.bookmarksList.querySelectorAll('.research-btn').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      const url = btn.dataset.url;
+      const title = btn.dataset.title;
+      const originalHtml = btn.innerHTML;
+      // Check if research already exists in cache
+      if (bookmarkResearchCache[url] && bookmarkResearchCache[url].status === 'done') {
+        toggleBookmarkAnalysis(url);
+        return;
+      }
+      btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;display:inline-block;"></span>';
+      btn.disabled = true;
+      try {
+        const data = await apiCall('/research', {
+          method: 'POST',
+          body: JSON.stringify({ url, title, user_notes: '', auto_process: true }),
+        });
+        // Poll for completion
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          const rd = await apiCall('/research?limit=50');
+          const match = (rd.research || []).find(r => r.url === url);
+          if (match && (match.status === 'done' || match.status === 'failed')) {
+            clearInterval(poll);
+            bookmarkResearchCache[url] = match;
+            renderBookmarks(bookmarks);
+            loadResearchResults();
+          } else if (attempts > 30) {
+            clearInterval(poll);
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+          }
+        }, 2000);
+      } catch (err) {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+      }
+    });
+  });
+  els.bookmarksList.querySelectorAll('.analysis-toggle').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleBookmarkAnalysis(btn.dataset.url);
     });
   });
   els.bookmarksList.querySelectorAll('.tbl-btn').forEach(btn => {
@@ -955,13 +1136,25 @@ function renderBookmarks(bookmarks) {
 async function loadAllBookmarks() {
   showStatus(els.historyStatus, 'Loading bookmarks...', 'loading');
   try {
-    const [bmData, hlData] = await Promise.all([
+    const [bmData, hlData, resData, remData] = await Promise.all([
       apiCall('/bookmarks?limit=100'),
       apiCall('/highlights/stats').catch(() => ({ total: 0 })),
+      apiCall('/research?limit=100').catch(() => ({ research: [] })),
+      apiCall('/reminders?due=true&limit=1').catch(() => ({ reminders: [] })),
     ]);
     els.totalBookmarksStat.textContent = bmData.stats?.total_bookmarks ?? bmData.total ?? 0;
     els.uniqueTopicsStat.textContent = bmData.stats?.unique_topics ?? '—';
     els.totalHighlightsStat.textContent = hlData.total ?? 0;
+    if (els.totalRemindersStat) {
+      const remCount = remData.total || (remData.reminders ? remData.reminders.length : 0);
+      els.totalRemindersStat.textContent = remCount;
+      if (remCount > 0) els.totalRemindersStat.style.color = 'var(--accent)';
+      else els.totalRemindersStat.style.color = '';
+    }
+    // Pre-populate research cache
+    (resData.research || []).forEach(r => {
+      if (r.url) bookmarkResearchCache[r.url] = r;
+    });
     renderBookmarks(bmData.bookmarks || []);
     hideStatus(els.historyStatus);
   } catch (err) {
@@ -1000,7 +1193,10 @@ function renderResearch(research) {
       '<div style="font-size:10px;color:var(--text-muted);margin-top:1px;word-break:break-all;">' + escapeHtml(truncate(r.url, 60)) + '</div>' +
       '<div class="list-meta">' +
         '<div class="res-status"><span class="st-badge ' + sc + '">' + r.status + '</span><span class="list-date">' + formatRelativeTime(r.created_at) + '</span></div>' +
-        (r.status === 'done' ? '<button class="btn btn-xs btn-secondary toggle-research-result">View Analysis</button>' : '') +
+        '<div style="display:flex;gap:4px;">' +
+          (r.status === 'done' ? '<button class="btn btn-xs btn-secondary toggle-research-result">View Analysis</button>' : '') +
+          (r.status === 'failed' ? '<button class="btn btn-xs btn-secondary retry-research" data-id="' + r.id + '" data-url="' + escapeHtml(r.url) + '" data-title="' + escapeHtml(r.title || '') + '">Retry</button>' : '') +
+        '</div>' +
       '</div>' +
       (r.research_result ? '<div class="res-result">' + escapeHtml(r.research_result) + '</div>' : '') +
       (r.status === 'failed' && r.error_message ? '<div style="font-size:10px;color:var(--red);margin-top:3px;">' + escapeHtml(r.error_message) + '</div>' : '') +
@@ -1013,6 +1209,21 @@ function renderResearch(research) {
       if (rd) { rd.classList.toggle('visible'); btn.textContent = rd.classList.contains('visible') ? 'Hide Analysis' : 'View Analysis'; }
     });
   });
+  els.researchList.querySelectorAll('.retry-research').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      btn.disabled = true;
+      btn.textContent = 'Retrying...';
+      try {
+        await apiCall('/research', {
+          method: 'POST',
+          body: JSON.stringify({ url: btn.dataset.url, title: btn.dataset.title, auto_process: true }),
+        });
+        // Wait a bit then refresh
+        setTimeout(() => { loadResearchResults(); Object.keys(bookmarkResearchCache).forEach(k => delete bookmarkResearchCache[k]); if (currentBookmarks.length) loadAllBookmarks(); }, 3000);
+      } catch { btn.disabled = false; btn.textContent = 'Retry'; }
+    });
+  });
 }
 
 async function loadResearchResults() {
@@ -1020,6 +1231,11 @@ async function loadResearchResults() {
     const data = await apiCall('/research?limit=20');
     els.totalResearchStat.textContent = data.total || 0;
     renderResearch(data.research || []);
+    // Auto-refresh if any research is still processing
+    const hasProcessing = (data.research || []).some(r => r.status === 'pending' || r.status === 'processing');
+    if (hasProcessing) {
+      setTimeout(loadResearchResults, 5000);
+    }
   } catch (err) {
     console.warn('[Research]', err.message);
     els.researchList.innerHTML = '<div class="empty"><div class="empty-title">Could not load research</div><div class="empty-sub">' + escapeHtml(err.message || '') + '</div></div>';
@@ -1069,7 +1285,24 @@ function renderHighlights(highlights) {
     el.addEventListener('click', e => {
       if (e.target.closest('.tbl-btn')) return;
       const u = el.dataset.url;
-      if (u && u !== 'about:blank') chrome.tabs.create({ url: u });
+      const itemId = el.dataset.id;
+      const titleEl = el.querySelector('.hl-color')?.nextSibling;
+      const title = titleEl?.textContent?.trim() || '';
+      const textEl = el.querySelector('.highlight-quote');
+      const text = textEl?.textContent || '';
+      const dateEl = el.querySelector('.list-date');
+      const date = dateEl?.textContent || '';
+      if (u && u !== 'about:blank') {
+        openSummaryModal({
+          type: 'highlight',
+          id: itemId,
+          url: u,
+          title: text || title || 'Highlight',
+          notes: text || '',
+          date: date,
+          badgeText: 'Highlight',
+        });
+      }
     });
     el.style.cursor = 'pointer';
   });
@@ -1123,7 +1356,21 @@ async function searchSavedContent(term) {
     els.searchSavedResults.style.display = 'block';
 
     els.searchSavedList.querySelectorAll('.list-item[data-url]:not([data-item-id])').forEach(item => {
-      item.addEventListener('click', () => { const u = item.dataset.url; if (u) chrome.tabs.create({ url: u }); });
+      item.addEventListener('click', () => {
+        const u = item.dataset.url;
+        const id = item.dataset.id;
+        const titleEl = item.querySelector('.list-item-title') || item.querySelector('.list-topic');
+        const title = titleEl?.textContent || '';
+        if (u) {
+          openSummaryModal({
+            type: 'bookmark',
+            id: id,
+            url: u,
+            title: title,
+            badgeText: 'Saved',
+          });
+        }
+      });
     });
     els.searchSavedList.querySelectorAll('.list-item[data-item-id]').forEach(item => {
       item.addEventListener('click', e => {
@@ -1161,7 +1408,21 @@ async function loadRelatedItemsForItem(itemId) {
       '</div>'
     ).join('');
     listEl.querySelectorAll('.list-item[data-url]').forEach(item => {
-      item.addEventListener('click', () => { const u = item.dataset.url; if (u) chrome.tabs.create({ url: u }); });
+      item.addEventListener('click', () => {
+        const u = item.dataset.url;
+        const id = item.dataset.id || item.dataset.itemId;
+        const titleEl = item.querySelector('.list-item-title');
+        const title = titleEl?.textContent || '';
+        if (u) {
+          openSummaryModal({
+            type: 'item',
+            id: id,
+            url: u,
+            title: title || 'Related',
+            badgeText: 'Related',
+          });
+        }
+      });
     });
   } catch (err) { console.warn('[Related]', err.message); container.style.display = 'none'; }
 }
@@ -1333,6 +1594,320 @@ $('import-data-input')?.addEventListener('change', async e => {
   } catch (err) { showStatus(els.searchStatus, 'Import failed: ' + err.message, 'error', 5000); }
   e.target.value = '';
 });
+
+// ─────────────────────────────────────────────
+// SUMMARY POPUP MODAL
+// ─────────────────────────────────────────────
+
+const smEls = {
+  overlay: $('summary-modal-overlay'),
+  closeBtn: $('summary-modal-close-btn'),
+  title: $('summary-modal-title'),
+  url: $('summary-modal-url'),
+  badge: $('summary-modal-badge'),
+  date: $('summary-modal-date'),
+  status: $('summary-modal-status'),
+  openUrlBtn: $('summary-open-url-btn'),
+  aiBtn: $('summary-ai-btn'),
+  researchBtn: $('summary-research-btn'),
+  deleteBtn: $('summary-delete-btn'),
+  tabSummary: $('summary-tab-summary'),
+  tabResearch: $('summary-tab-research'),
+  tabNotes: $('summary-tab-notes'),
+  panelSummary: $('summary-panel-summary'),
+  panelResearch: $('summary-panel-research'),
+  panelNotes: $('summary-panel-notes'),
+  aiContent: $('summary-ai-content'),
+  aiLoading: $('summary-ai-loading'),
+  researchContent: $('summary-research-content'),
+  researchLoading: $('summary-research-loading'),
+  notesContent: $('summary-notes-content'),
+};
+
+/** Current item shown in the summary popup */
+let smItem = null;
+let smResearchActive = false;
+
+function openSummaryModal(item) {
+  smItem = item;
+  if (!smEls.overlay) return;
+
+  // Populate header
+  smEls.title.textContent = item.title || 'Untitled';
+  smEls.url.textContent = item.url || '';
+  smEls.badge.textContent = item.badgeText || (item.type || 'Item').charAt(0).toUpperCase() + (item.type || 'Item').slice(1);
+  smEls.date.textContent = item.date ? formatRelativeTime(item.date) : '';
+
+  // Reset panels
+  switchSummaryTab('summary');
+  smEls.aiContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">No AI summary yet</div><div class="empty-sub" style="font-size:10px;">Click the AI Summary button above to generate one</div></div>';
+  smEls.aiLoading.style.display = 'none';
+  smEls.researchContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">No research yet</div><div class="empty-sub" style="font-size:10px;">Click the Research button to analyze this page</div></div>';
+  smEls.researchLoading.style.display = 'none';
+  smEls.notesContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">No notes for this item</div></div>';
+
+  // Enable/disable buttons based on item
+  smEls.openUrlBtn.style.display = item.url ? 'inline-flex' : 'none';
+  smEls.aiBtn.disabled = false;
+  smEls.researchBtn.disabled = false;
+  smEls.deleteBtn.disabled = false;
+  smEls.status.textContent = '';
+
+  // Show modal
+  smEls.overlay.classList.add('open');
+
+  // Auto-fetch AI summary if URL is available
+  if (item.url) {
+    setTimeout(() => fetchAISummary(item.url), 300);
+  }
+}
+
+function closeSummaryModal() {
+  if (smEls.overlay) smEls.overlay.classList.remove('open');
+  smItem = null;
+  smResearchActive = false;
+}
+
+function switchSummaryTab(tab) {
+  const tabs = ['summary', 'research', 'notes'];
+  tabs.forEach(t => {
+    const tabBtn = smEls['tab' + t.charAt(0).toUpperCase() + t.slice(1)];
+    const panel = smEls['panel' + t.charAt(0).toUpperCase() + t.slice(1)];
+    if (tabBtn) tabBtn.classList.toggle('active', t === tab);
+    if (panel) panel.style.display = t === tab ? 'block' : 'none';
+  });
+}
+
+async function fetchAISummary(url) {
+  if (!url) return;
+  smEls.aiLoading.style.display = 'block';
+  smEls.aiContent.style.display = 'none';
+  try {
+    // First check if there's already a saved item with summary
+    const searchData = await apiCall('/items/search?q=' + encodeURIComponent(url)).catch(() => null);
+    if (searchData?.results?.length > 0) {
+      const match = searchData.results.find(r => r.url === url);
+      if (match && (match.summary || match.content)) {
+        smEls.aiContent.innerHTML = '<div style="font-size:11px;line-height:1.6;color:var(--text-secondary);">' + escapeHtml(match.summary || match.content.slice(0, 500)) + '</div>';
+        if (match.tags) {
+          smEls.aiContent.innerHTML += '<div style="margin-top:6px;font-size:9px;color:var(--text-muted);">Tags: ' + escapeHtml(match.tags) + '</div>';
+        }
+        smEls.aiLoading.style.display = 'none';
+        smEls.aiContent.style.display = 'block';
+        return;
+      }
+    }
+
+    // Fetch page + AI summary via backend
+    const data = await apiCall('/analyze-url', {
+      method: 'POST',
+      body: JSON.stringify({ url, title: smItem?.title || '' }),
+    });
+
+    if (data.summary) {
+      const formatted = data.summary
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+      smEls.aiContent.innerHTML = '<div style="font-size:11px;line-height:1.6;color:var(--text-secondary);">' + formatted + '</div>';
+      if (data.tags && data.tags.length > 0) {
+        smEls.aiContent.innerHTML += '<div style="margin-top:6px;font-size:9px;color:var(--text-muted);">Tags: ' + escapeHtml(data.tags.join(', ')) + '</div>';
+      }
+    } else {
+      smEls.aiContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">Could not generate summary</div><div class="empty-sub" style="font-size:10px;">' + escapeHtml(data.error || 'Page content not available') + '</div></div>';
+    }
+  } catch (err) {
+    smEls.aiContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">Summary unavailable</div><div class="empty-sub" style="font-size:10px;">' + escapeHtml(err.message || 'Server offline') + '</div></div>';
+  } finally {
+    smEls.aiLoading.style.display = 'none';
+    smEls.aiContent.style.display = 'block';
+  }
+}
+
+async function fetchResearch(url) {
+  if (!url) return;
+  smResearchActive = true;
+  smEls.researchLoading.style.display = 'block';
+  smEls.researchContent.style.display = 'none';
+  try {
+    const data = await apiCall('/research?limit=50');
+    const match = (data.research || []).find(r => r.url === url);
+    if (match) {
+      if (match.status === 'done' && match.research_result) {
+        const formatted = match.research_result
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*(.*?)\*/g, '<em>$1</em>')
+          .replace(/\n\n/g, '<br><br>')
+          .replace(/\n/g, '<br>');
+        smEls.researchContent.innerHTML = '<div style="font-size:11px;line-height:1.6;color:var(--text-secondary);">' + formatted + '</div>';
+      } else if (match.status === 'processing' || match.status === 'pending') {
+        smEls.researchContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">Research in progress</div><div class="empty-sub" style="font-size:10px;">AI is analyzing this page...</div></div>';
+        // Poll for completion
+        setTimeout(() => { if (smResearchActive && smItem?.url === url) fetchResearch(url); }, 3000);
+      } else if (match.status === 'failed') {
+        smEls.researchContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">Research failed</div><div class="empty-sub" style="font-size:10px;">' + escapeHtml(match.error_message || 'Unknown error') + '</div></div>';
+      }
+    } else {
+      smEls.researchContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">No research yet</div><div class="empty-sub" style="font-size:10px;">Click the Research button to analyze this page</div></div>';
+    }
+  } catch (err) {
+    smEls.researchContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">Could not load research</div><div class="empty-sub" style="font-size:10px;">' + escapeHtml(err.message || '') + '</div></div>';
+  } finally {
+    smEls.researchLoading.style.display = 'none';
+    smEls.researchContent.style.display = 'block';
+  }
+}
+
+async function runResearchAndPoll(url, title) {
+  if (!url) return;
+  smEls.researchLoading.style.display = 'block';
+  smEls.researchContent.style.display = 'none';
+  smEls.researchBtn.disabled = true;
+  smEls.researchBtn.innerHTML = '<span class="spinner" style="width:10px;height:10px;display:inline-block;"></span> Researching...';
+  try {
+    await apiCall('/research', {
+      method: 'POST',
+      body: JSON.stringify({ url, title: title || '', auto_process: true }),
+    });
+    // Start polling for results
+    smResearchActive = true;
+    const poll = () => {
+      if (!smResearchActive || smItem?.url !== url) return;
+      fetchResearch(url).then(() => {
+        // Check if still processing
+        const content = smEls.researchContent.textContent || '';
+        if (content.includes('in progress') || content.includes('processing')) {
+          setTimeout(poll, 3000);
+        } else {
+          smEls.researchBtn.disabled = false;
+          smEls.researchBtn.innerHTML = '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Research';
+        }
+      });
+    };
+    setTimeout(poll, 2000);
+  } catch (err) {
+    smEls.researchContent.innerHTML = '<div class="empty" style="padding:12px 8px;"><div class="empty-title" style="font-size:11px;">Research failed to start</div></div>';
+    smEls.researchLoading.style.display = 'none';
+    smEls.researchContent.style.display = 'block';
+    smEls.researchBtn.disabled = false;
+    smEls.researchBtn.innerHTML = '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Research';
+  }
+}
+
+async function deleteCurrentItem() {
+  if (!smItem || !smItem.id) return;
+  if (!confirm('Delete this ' + (smItem.type || 'item') + '?')) return;
+  smEls.deleteBtn.disabled = true;
+  smEls.status.textContent = 'Deleting...';
+  try {
+    if (smItem.type === 'bookmark') {
+      await apiCall('/bookmark/' + smItem.id, { method: 'DELETE' });
+    } else if (smItem.type === 'note') {
+      await apiCall('/notes/' + smItem.id, { method: 'DELETE' });
+    } else if (smItem.type === 'highlight') {
+      await apiCall('/highlights/' + smItem.id, { method: 'DELETE' });
+    } else if (smItem.type === 'item') {
+      await apiCall('/items/' + smItem.id, { method: 'DELETE' });
+    }
+    smEls.status.textContent = 'Deleted';
+    smEls.status.style.color = 'var(--green)';
+    setTimeout(closeSummaryModal, 800);
+    // Refresh lists
+    if (historyLoaded) loadAllBookmarks();
+    if (researchLoaded) loadResearchResults();
+    loadRecentNotes();
+  } catch (err) {
+    smEls.status.textContent = 'Failed: ' + (err.message || '');
+    smEls.status.style.color = 'var(--red)';
+    smEls.deleteBtn.disabled = false;
+  }
+}
+
+// ─── Summary Modal Events ───
+
+smEls.closeBtn?.addEventListener('click', closeSummaryModal);
+smEls.overlay?.addEventListener('click', e => { if (e.target === smEls.overlay) closeSummaryModal(); });
+
+smEls.tabSummary?.addEventListener('click', () => switchSummaryTab('summary'));
+smEls.tabResearch?.addEventListener('click', () => {
+  switchSummaryTab('research');
+  if (smItem?.url) fetchResearch(smItem.url);
+});
+smEls.tabNotes?.addEventListener('click', () => {
+  switchSummaryTab('notes');
+  // Show notes from the bookmark/item
+  if (smItem?.notes || smItem?.content) {
+    smEls.notesContent.innerHTML = '<div style="font-size:11px;line-height:1.6;color:var(--text-secondary);">' + escapeHtml(smItem.notes || smItem.content) + '</div>';
+  }
+});
+
+smEls.openUrlBtn?.addEventListener('click', () => {
+  if (smItem?.url) {
+    chrome.tabs.create({ url: smItem.url });
+    closeSummaryModal();
+  }
+});
+
+smEls.aiBtn?.addEventListener('click', () => {
+  switchSummaryTab('summary');
+  if (smItem?.url) fetchAISummary(smItem.url);
+});
+
+smEls.researchBtn?.addEventListener('click', () => {
+  switchSummaryTab('research');
+  if (smItem?.url) {
+    // First check if research exists
+    fetchResearch(smItem.url).then(() => {
+      const content = smEls.researchContent.textContent || '';
+      if (content.includes('No research yet') || content.includes('not yet')) {
+        runResearchAndPoll(smItem.url, smItem.title);
+      }
+    });
+  }
+});
+
+smEls.deleteBtn?.addEventListener('click', deleteCurrentItem);
+
+// ─── Override bookmark list click to show summary modal ───
+
+// Patch renderBookmarks to intercept clicks
+const _origRenderBookmarks = renderBookmarks;
+renderBookmarks = function(bookmarks) {
+  _origRenderBookmarks(bookmarks);
+  // Re-bind list item clicks to show summary modal
+  els.bookmarksList.querySelectorAll('.list-item[data-url]').forEach(item => {
+    // Remove existing listeners by replacing with a clone approach -
+    // instead, just ensure our handler fires first
+    const _origClick = item._listClickHandler;
+    if (_origClick) item.removeEventListener('click', _origClick);
+
+    const handler = function(e) {
+      if (e.target.closest('.tbl-btn') || e.target.closest('.research-btn') || e.target.closest('.analysis-toggle')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const url = item.dataset.url;
+      const id = item.dataset.id;
+      const topic = item.querySelector('.list-topic')?.textContent || '';
+      const title = item.querySelector('.list-item-title')?.textContent || '';
+      const notesEl = item.querySelector('.list-item-text');
+      const notes = notesEl ? notesEl.textContent : '';
+      const date = item.querySelector('.list-date')?.textContent || '';
+      openSummaryModal({
+        type: 'bookmark',
+        id: id,
+        url: url,
+        title: title || topic,
+        topic: topic,
+        notes: notes,
+        date: date,
+        badgeText: 'Bookmark',
+      });
+    };
+    item._listClickHandler = handler;
+    item.addEventListener('click', handler);
+  });
+};
 
 // ─────────────────────────────────────────────
 // BOOT
