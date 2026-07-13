@@ -25,13 +25,13 @@ npm start
 # → http://localhost:5000/api/health
 ```
 
-### 3. Chrome Extension
+### 2. Chrome Extension
 
 1. Open `chrome://extensions` → Developer mode
 2. "Load unpacked" → select `extension/` folder
 3. Press `Ctrl+Shift+E` to open the popup
 
-### 4. Windows Desktop App
+### 3. Windows Desktop App
 
 ```bash
 cd desktop
@@ -49,10 +49,8 @@ Global shortcut: `Ctrl+Shift+Space` to open overlay from anywhere.
 ```
 easy-rewind/
 ├── backend/
-│   ├── data/
-│   │   └── easy-rewind.db     — SQLite database (auto-created)
 │   ├── server.js              — Express server (CORS, rate limiting, static files)
-│   ├── routes/api.js          — API endpoints + SQLite + Gemini AI
+│   ├── routes/                — API endpoints + Neo4j + Gemini AI
 │   ├── .env                   — Your credentials
 │   └── package.json
 │
@@ -73,8 +71,8 @@ easy-rewind/
 ├── frontend/
 │   └── dashboard.html          — Analytics dashboard
 │
-└── database/
-    └── setup.sql               — Reference schema (SQLite creates tables automatically)
+├── database/
+│   └── setup.sql               — Reference schema (Neo4j Cypher/Legacy)
 ```
 
 ---
@@ -134,7 +132,7 @@ All at `http://localhost:5000/api` with `x-user-id` header.
 |-------|------------|
 | **Chrome Extension** | Manifest V3, Vanilla JS |
 | **Backend** | Node.js, Express.js |
-| **Database** | SQLite (local file via `better-sqlite3`) |
+| **Database** | Neo4j Aura (Graph Database) |
 | **AI** | Google Gemini (`gemini-2.5-flash`) |
 | **Windows App** | Electron, system tray, global shortcut |
 | **Dashboard** | Pure HTML/CSS/JS |
