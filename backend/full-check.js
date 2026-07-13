@@ -31,7 +31,7 @@ async function checkAll() {
     log('Server running', d.status === 'ok', 'http://localhost:5000');
     log('SQLite connected', d.storage_ready, d.storage_ready ? 'DB ready at backend/data/' : 'DB issue');
     log('AI key configured', d.ai_configured, d.ai_configured ? 'Ready' : 'Not set (mock mode)');
-  } catch (e) {
+  } catch (_e) {
     log('Server running', false, 'Cannot reach localhost:5000');
     console.log('\nServer is down. Cannot continue tests.');
     return;

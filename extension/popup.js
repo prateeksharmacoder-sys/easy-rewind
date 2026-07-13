@@ -9,7 +9,7 @@
 // CONSTANTS
 // ─────────────────────────────────────────────
 const DEFAULT_API_BASE = 'http://localhost:5000';
-const DASHBOARD_URL = 'http://localhost:5000/dashboard';
+
 
 function getApiUrl(path) {
   return new Promise((resolve) => {
@@ -39,7 +39,7 @@ let currentTabId = null;
 let selectedReminderMinutes = 0;
 let selectedBookmarkReminderMinutes = null;
 let conversationHistory = [];
-let currentLookupTerm = '';
+
 
 // ─────────────────────────────────────────────
 // DOM REFS
@@ -717,7 +717,7 @@ async function handleSummarizePage() {
     if (!combined || combined.length < 20) {
       if (!pageData.url && !pageData.title) throw new Error('Not enough content to summarize.');
     }
-    const contentToSend = combined || (pageData.title ? 'Title: ' + pageData.title : '') + '\n\nURL: ' + pageData.url;
+
 
     let summary = null, source = null;
     if (window.ai?.summarizer || 'Summarizer' in window) {
@@ -1017,15 +1017,7 @@ function toggleBookmarkAnalysis(url) {
   });
 }
 
-async function getBookmarkResearch(url) {
-  if (bookmarkResearchCache[url]) return bookmarkResearchCache[url];
-  try {
-    const data = await apiCall('/research?limit=50');
-    const match = (data.research || []).find(r => r.url === url);
-    if (match) bookmarkResearchCache[url] = match;
-    return match || null;
-  } catch { return null; }
-}
+
 
 function renderBookmarks(bookmarks) {
   currentBookmarks = bookmarks || [];
@@ -1078,7 +1070,7 @@ function renderBookmarks(bookmarks) {
       btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;display:inline-block;"></span>';
       btn.disabled = true;
       try {
-        const data = await apiCall('/research', {
+        await apiCall('/research', {
           method: 'POST',
           body: JSON.stringify({ url, title, user_notes: '', auto_process: true }),
         });

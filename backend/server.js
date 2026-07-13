@@ -90,6 +90,33 @@ app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─────────────────────────────────────────────
+// Neo4j Object Normalizer Middleware
+// Automatically converts Neo4j Integers to Numbers and DateTimes to ISO Strings
+// ─────────────────────────────────────────────
+function normalizeNeo4j(obj) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (obj instanceof Date) return obj.toISOString();
+  if (obj.low !== undefined && obj.high !== undefined && typeof obj.toNumber === 'function') return obj.toNumber();
+  if (obj.year !== undefined && obj.month !== undefined && obj.day !== undefined && typeof obj.toString === 'function') return obj.toString();
+  if (Array.isArray(obj)) return obj.map(normalizeNeo4j);
+  const res = {};
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      res[key] = normalizeNeo4j(obj[key]);
+    }
+  }
+  return res;
+}
+
+app.use((req, res, next) => {
+  const originalJson = res.json;
+  res.json = function (obj) {
+    return originalJson.call(this, normalizeNeo4j(obj));
+  };
+  next();
+});
+
+// ─────────────────────────────────────────────
 // Request Logging with timing
 // ─────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -99,7 +126,7 @@ app.use((req, res, next) => {
   // Capture response finish
   res.on('finish', () => {
     const duration = Date.now() - start;
-    const level = res.statusCode >= 400 ? 'WARN' : 'INFO';
+
     const emoji = res.statusCode >= 500 ? '❌' : res.statusCode >= 400 ? '⚠️' : '✅';
     console.log(`${emoji} [${timestamp}] ${req.method} ${req.originalUrl} → ${res.statusCode} (${duration}ms)`);
   });
@@ -134,7 +161,7 @@ app.use('/api', apiRoutes);
 // Global Error Handler
 // Catches any unhandled errors and returns clean JSON responses
 // ─────────────────────────────────────────────
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error('[Server Error]', err.message);
 
   // CORS errors

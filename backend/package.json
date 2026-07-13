@@ -16,18 +16,18 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "axios": "^1.6.5",
-    "better-sqlite3": "^12.10.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
+    "neo4j-driver": "^6.1.0",
     "nodemailer": "^6.10.0"
   },
   "devDependencies": {
     "eslint": "^10.5.0",
-    "prettier": "^3.5.0",
     "jest": "^30.4.2",
     "nodemon": "^3.0.3",
+    "prettier": "^3.5.0",
     "supertest": "^7.2.2"
   }
 }

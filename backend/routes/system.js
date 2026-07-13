@@ -19,24 +19,30 @@ const {
   sanitize,
   sanitizeUserId,
   getUserId,
-  normalizeDate,
   saveSettings,
 } = require('./helpers');
 
+const neo4j = require('neo4j-driver');
 const SETTINGS_PATH = path.join(__dirname, '..', 'data', 'settings.json');
 
 // ─────────────────────────────────────────────
 // GET /api/health — Server health check
 // ─────────────────────────────────────────────
-router.get('/health', (req, res) => {
+router.get('/health', async (req, res) => {
   const database = getDb();
-  const dbOk = database && database.open;
+  let dbOk = false;
+  try {
+    const session = database.session();
+    await session.run('RETURN 1');
+    await session.close();
+    dbOk = true;
+  } catch (_) {}
   res.json({
     status: 'ok',
     service: 'easy-rewind Learning Assistant API',
     timestamp: new Date().toISOString(),
     version: '2.0.1',
-    storage: 'sqlite',
+    storage: 'neo4j',
     storage_ready: dbOk,
     ai_configured: !!getGenAI(),
   });
@@ -45,18 +51,28 @@ router.get('/health', (req, res) => {
 // ─────────────────────────────────────────────
 // POST /api/session — Create or resume a client session
 // ─────────────────────────────────────────────
-router.post('/session', (req, res) => {
+router.post('/session', async (req, res) => {
   const { client_id, device, client_type } = req.body || {};
   const userId = config.profileUserId || 'anonymous';
 
-  // Migrate any data saved under 'anonymous' to the canonical user ID,
-  // so items saved by the extension before session resolution appear in the dashboard.
+  // Migrate any data saved under 'anonymous' to canonical user ID
   if (userId !== 'anonymous') {
     try {
       const database = getDb();
-      const tables = ['bookmarks', 'items', 'notes', 'reminders', 'highlights', 'research_queue', 'search_log'];
-      for (const table of tables) {
-        database.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = 'anonymous'`).run(userId);
+      const session = database.session();
+      try {
+        const labels = ['Bookmark', 'Item', 'Note', 'Reminder', 'Highlight', 'ResearchQueue', 'SearchLog'];
+        for (const label of labels) {
+          await session.run(
+            `MATCH (old:User {id: 'anonymous'})-[r]->(n:${label})
+             MERGE (u:User {id: $userId})
+             CREATE (u)-[r2]->(n)
+             DELETE r`,
+            { userId }
+          );
+        }
+      } finally {
+        await session.close();
       }
     } catch (_) {}
   }
@@ -73,8 +89,9 @@ router.post('/session', (req, res) => {
 // ─────────────────────────────────────────────
 // POST /api/users/merge — Merge two user accounts
 // ─────────────────────────────────────────────
-router.post('/users/merge', (req, res) => {
+router.post('/users/merge', async (req, res) => {
   const database = getDb();
+  const session = database.session();
   const targetUserId = sanitizeUserId(req.body?.to_user_id || config.profileUserId);
   const sourceUserId = sanitizeUserId(req.body?.from_user_id);
 
@@ -82,71 +99,36 @@ router.post('/users/merge', (req, res) => {
     return res.json({ success: true, merged: false, user_id: targetUserId });
   }
 
-  const tables = {
-    bookmarks: ['user_id', 'url', 'title', 'topic', 'notes', 'remind_at', 'reminded', 'created_at'],
-    notes: [
-      'user_id',
-      'content',
-      'source_url',
-      'source_title',
-      'remind_at',
-      'reminded',
-      'reminder_note',
-      'completed',
-      'created_at',
-    ],
-    highlights: ['user_id', 'url', 'page_title', 'text', 'context', 'color', 'tags', 'note', 'created_at'],
-    research_queue: [
-      'user_id',
-      'url',
-      'title',
-      'user_notes',
-      'research_result',
-      'status',
-      'error_message',
-      'remind_when_done',
-      'created_at',
-      'completed_at',
-    ],
-    reminders: [
-      'user_id',
-      'reminder_type',
-      'reference_type',
-      'reference_id',
-      'title',
-      'message',
-      'remind_at',
-      'reminded',
-      'dismissed',
-      'created_at',
-      'repeat_interval_days',
-      'repeat_count',
-      'max_repeats',
-      'next_review_at',
-    ],
-    search_log: ['user_id', 'query', 'found', 'created_at'],
-  };
-
-  const merged = {};
   try {
-    for (const [table, columns] of Object.entries(tables)) {
-      const rows = database.prepare(`SELECT ${columns.join(', ')} FROM ${table} WHERE user_id = ?`).all(sourceUserId);
-      const insert = database.prepare(
-        `INSERT OR IGNORE INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`
+    const labels = ['Bookmark', 'Item', 'Note', 'Reminder', 'Highlight', 'ResearchQueue', 'SearchLog'];
+    const merged = {};
+    const relNames = { Bookmark: 'HAS_BOOKMARK', Item: 'HAS_ITEM', Note: 'HAS_NOTE', Reminder: 'HAS_REMINDER', Highlight: 'HAS_HIGHLIGHT', ResearchQueue: 'HAS_RESEARCH', SearchLog: 'HAS_SEARCH_LOG' };
+
+    for (const label of labels) {
+      const rel = relNames[label];
+      const countRes = await session.run(
+        `MATCH (src:User {id: $src})-[:${rel}]->(n:${label}) RETURN count(n) AS c`,
+        { src: sourceUserId }
       );
-      const tx = database.transaction(rows => {
-        for (const row of rows) {
-          const values = columns.map(col => (col === 'user_id' ? targetUserId : row[col]));
-          insert.run(...values);
-        }
-      });
-      tx(rows);
-      merged[table] = rows.length;
+      const count = countRes.records[0] ? countRes.records[0].get('c').toNumber() : 0;
+      if (count > 0) {
+        await session.run(
+          `MATCH (src:User {id: $src})-[r:${rel}]->(n:${label})
+           MERGE (tgt:User {id: $tgt})
+           MERGE (tgt)-[:${rel}]->(n)
+           DELETE r`,
+          { src: sourceUserId, tgt: targetUserId }
+        );
+      }
+      merged[label.toLowerCase()] = count;
     }
+
     return res.json({ success: true, merged: true, user_id: targetUserId, merged_counts: merged });
   } catch (err) {
     console.error('[Merge Users Error]', err.message);
     return res.status(500).json({ error: 'Failed to merge users.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -170,20 +152,29 @@ router.post('/research', async (req, res) => {
   }
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const info = database
-      .prepare(
-        `
-      INSERT INTO research_queue (url, title, user_notes, status, user_id)
-      VALUES (?, ?, ?, 'pending', ?)
-    `
-      )
-      .run(sanitize(url, 2000), sanitize(title || url, 500), sanitize(user_notes || '', 1000), user_id);
+    const result = await session.run(
+      `
+      MERGE (u:User {id: $userId})
+      CREATE (r:ResearchQueue {
+        id: randomUUID(),
+        url: $url,
+        title: $title,
+        user_notes: $userNotes,
+        status: 'pending',
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_RESEARCH]->(r)
+      RETURN r
+      `,
+      { userId: user_id, url: sanitize(url, 2000), title: sanitize(title || url, 500), userNotes: sanitize(user_notes || '', 1000) }
+    );
 
-    const research = database.prepare('SELECT * FROM research_queue WHERE id = ?').get(info.lastInsertRowid);
+    const research = result.records[0] ? result.records[0].get('r').properties : null;
 
-    if (auto_process !== false) {
+    if (auto_process !== false && research) {
       processResearch(research.id, url, title, user_notes, user_id, database).catch(err => {
         console.warn('[Research Process Error]', err.message);
       });
@@ -193,15 +184,15 @@ router.post('/research', async (req, res) => {
   } catch (err) {
     console.error('[Research Queue Error]', err.message);
     return res.status(500).json({ error: 'Failed to queue research.' });
+  } finally {
+    await session.close();
   }
 });
 
-/**
- * Process a research queue item: fetch page, run AI analysis, store result.
- */
 async function processResearch(id, url, title, userNotes, userId, database) {
+  const session = database.session();
   try {
-    database.prepare("UPDATE research_queue SET status = 'processing' WHERE id = ?").run(id);
+    await session.run(`MATCH (r:ResearchQueue {id: $id}) SET r.status = 'processing'`, { id });
 
     let pageContent = '';
     try {
@@ -222,9 +213,7 @@ async function processResearch(id, url, title, userNotes, userId, database) {
 
     const ai = getGenAI();
     if (!ai) {
-      database
-        .prepare("UPDATE research_queue SET status = 'failed', error_message = 'AI not configured' WHERE id = ?")
-        .run(id);
+      await session.run(`MATCH (r:ResearchQueue {id: $id}) SET r.status = 'failed', r.error_message = 'AI not configured'`, { id });
       return;
     }
 
@@ -248,81 +237,105 @@ Format using plain text with markdown headers.`;
 
     const analysis = await callGemini(prompt);
 
-    database
-      .prepare(
-        `
-      UPDATE research_queue SET status = 'done', research_result = ?, completed_at = (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')
-      WHERE id = ?
-    `
-      )
-      .run(analysis, id);
+    await session.run(
+      `MATCH (r:ResearchQueue {id: $id}) SET r.status = 'done', r.research_result = $result, r.completed_at = datetime()`,
+      { id, result: analysis }
+    );
 
-    // Also save to items table for future AI summary access
+    // Also upsert to items for future AI summary access
     try {
-      const sourceType = 'web';
-      const existingItem = database.prepare('SELECT id FROM items WHERE url = ? AND user_id = ?').get(url, userId);
-      if (existingItem) {
-        database
-          .prepare("UPDATE items SET ai_summary = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z') WHERE id = ?")
-          .run(analysis, existingItem.id);
-        console.log('[Research] Updated item', existingItem.id, 'with AI summary');
+      const existingRes = await session.run(
+        `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {url: $url}) RETURN i`,
+        { userId, url: sanitize(url, 2000) }
+      );
+      if (existingRes.records.length > 0) {
+        const existingId = existingRes.records[0].get('i').properties.id;
+        await session.run(`MATCH (i:Item {id: $id}) SET i.ai_summary = $summary, i.updated_at = datetime()`, { id: existingId, summary: analysis });
+        console.log('[Research] Updated item', existingId, 'with AI summary');
       } else {
-        database
-          .prepare(
-            `INSERT INTO items (user_id, url, title, content, ai_summary, tags, source_type, memory_score, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, '', ?, 1.0, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))`
-          )
-          .run(userId, sanitize(url, 2000), sanitize(title || url, 500), (pageContent || '').slice(0, 2000), analysis, sourceType);
-        const itemId = database.prepare('SELECT last_insert_rowid() as id').get().id;
-        console.log('[Research] Created item', itemId, 'with AI summary');
+        await session.run(
+          `
+          MERGE (u:User {id: $userId})
+          CREATE (i:Item {
+            id: randomUUID(),
+            url: $url,
+            title: $title,
+            content: $content,
+            ai_summary: $summary,
+            tags: '',
+            source_type: 'web',
+            memory_score: 1.0,
+            interaction_count: 0,
+            created_at: datetime(),
+            updated_at: datetime()
+          })
+          CREATE (u)-[:HAS_ITEM]->(i)
+          `,
+          { userId, url: sanitize(url, 2000), title: sanitize(title || url, 500), content: (pageContent || '').slice(0, 2000), summary: analysis }
+        );
+        console.log('[Research] Created item with AI summary');
       }
     } catch (itemErr) {
       console.warn('[Research] Failed to save to items:', itemErr.message);
     }
 
-    database
-      .prepare(
-        `
-      INSERT INTO reminders (user_id, reminder_type, reference_type, reference_id, title, message, remind_at)
-      VALUES (?, 'research_done', 'research', ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%S', 'now', '+5 minutes') || 'Z'))
-    `
-      )
-      .run(
-        userId,
-        id,
-        `📖 Research ready: ${sanitize(title || 'Untitled', 100)}`,
-        'Your AI deep research has been completed.'
-      );
+    // Create reminder
+    await session.run(
+      `
+      MATCH (u:User {id: $userId})
+      CREATE (rem:Reminder {
+        id: randomUUID(),
+        reminder_type: 'research_done',
+        reference_type: 'research',
+        reference_id: $refId,
+        title: $title,
+        message: 'Your AI deep research has been completed.',
+        remind_at: datetime() + duration({minutes: 5}),
+        reminded: 0,
+        dismissed: 0,
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_REMINDER]->(rem)
+      `,
+      { userId, refId: id, title: `📖 Research ready: ${sanitize(title || 'Untitled', 100)}` }
+    );
 
     console.log(`[Research] Completed for ID ${id}: "${title}"`);
   } catch (err) {
     console.error('[Research Process Error]', err.message);
     try {
-      database
-        .prepare("UPDATE research_queue SET status = 'failed', error_message = ? WHERE id = ?")
-        .run(err.message, id);
+      await session.run(`MATCH (r:ResearchQueue {id: $id}) SET r.status = 'failed', r.error_message = $msg`, { id, msg: err.message });
     } catch (_) {}
+  } finally {
+    await session.close();
   }
 }
 
 // GET /api/research — Get research results
-router.get('/research', (req, res) => {
+router.get('/research', async (req, res) => {
   const user_id = getUserId(req);
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
   const offset = parseInt(req.query.offset) || 0;
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const total = database.prepare('SELECT COUNT(*) as count FROM research_queue WHERE user_id = ?').get(user_id).count;
-    const research = database
-      .prepare('SELECT * FROM research_queue WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?')
-      .all(user_id, limit, offset);
+    const countRes = await session.run(`MATCH (u:User {id: $userId})-[:HAS_RESEARCH]->(r:ResearchQueue) RETURN count(r) AS c`, { userId: user_id });
+    const dataRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_RESEARCH]->(r:ResearchQueue) RETURN r ORDER BY r.created_at DESC SKIP $skip LIMIT $limit`,
+      { userId: user_id, skip: neo4j.int(offset), limit: neo4j.int(limit) }
+    );
+
+    const total = countRes.records[0] ? countRes.records[0].get('c').toNumber() : 0;
+    const research = dataRes.records.map(r => r.get('r').properties);
 
     return res.json({ research: research || [], total });
   } catch (err) {
     console.error('[Get Research Error]', err.message);
     return res.status(500).json({ error: 'Failed to load research.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -365,7 +378,7 @@ router.get('/fetch-page-content', async (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/push-subscribe — Register a device for push notifications
-router.post('/push-subscribe', (req, res) => {
+router.post('/push-subscribe', async (req, res) => {
   const { platform, subscription_json, device_name } = req.body;
   const user_id = getUserId(req);
 
@@ -374,42 +387,59 @@ router.post('/push-subscribe', (req, res) => {
   }
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const info = database
-      .prepare(
-        `
-      INSERT INTO push_subscriptions (platform, subscription_json, device_name, last_active, user_id)
-      VALUES (?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), ?)
-    `
-      )
-      .run(
-        sanitize(platform, 20),
-        typeof subscription_json === 'string' ? subscription_json : JSON.stringify(subscription_json),
-        sanitize(device_name || '', 100),
-        user_id
-      );
+    const result = await session.run(
+      `
+      MERGE (u:User {id: $userId})
+      CREATE (ps:PushSubscription {
+        id: randomUUID(),
+        platform: $platform,
+        subscription_json: $subscriptionJson,
+        device_name: $deviceName,
+        last_active: datetime(),
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_PUSH_SUBSCRIPTION]->(ps)
+      RETURN ps
+      `,
+      {
+        userId: user_id,
+        platform: sanitize(platform, 20),
+        subscriptionJson: typeof subscription_json === 'string' ? subscription_json : JSON.stringify(subscription_json),
+        deviceName: sanitize(device_name || '', 100)
+      }
+    );
 
-    const subscription = database.prepare('SELECT * FROM push_subscriptions WHERE id = ?').get(info.lastInsertRowid);
+    const subscription = result.records[0] ? result.records[0].get('ps').properties : null;
     return res.json({ success: true, subscription });
   } catch (err) {
     console.error('[Push Subscribe Error]', err.message);
     return res.status(500).json({ error: 'Failed to register device.' });
+  } finally {
+    await session.close();
   }
 });
 
 // DELETE /api/push-subscribe/:id — Unsubscribe
-router.delete('/push-subscribe/:id', (req, res) => {
+router.delete('/push-subscribe/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    database.prepare('DELETE FROM push_subscriptions WHERE id = ? AND user_id = ?').run(id, user_id);
+    await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_PUSH_SUBSCRIPTION]->(ps:PushSubscription {id: $id}) DETACH DELETE ps`,
+      { userId: user_id, id: String(id) }
+    );
     return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to unsubscribe.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -418,40 +448,46 @@ router.delete('/push-subscribe/:id', (req, res) => {
 // ═════════════════════════════════════════════
 
 // GET /api/export — Export all user data as JSON
-router.get('/export', (req, res) => {
+router.get('/export', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
 
-    const bookmarks = database.prepare('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY created_at DESC').all(uid);
-    const notes = database.prepare('SELECT * FROM notes WHERE user_id = ? ORDER BY created_at DESC').all(uid);
-    const highlights = database.prepare('SELECT * FROM highlights WHERE user_id = ? ORDER BY created_at DESC').all(uid);
-    const research = database
-      .prepare('SELECT * FROM research_queue WHERE user_id = ? ORDER BY created_at DESC')
-      .all(uid);
-    const reminders = database.prepare('SELECT * FROM reminders WHERE user_id = ? ORDER BY created_at DESC').all(uid);
+    try {
+      const bmRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_BOOKMARK]->(b:Bookmark) RETURN b ORDER BY b.created_at DESC`, { uid });
+      const notesRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_NOTE]->(n:Note) RETURN n ORDER BY n.created_at DESC`, { uid });
+      const hlRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight) RETURN h ORDER BY h.created_at DESC`, { uid });
+      const resRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_RESEARCH]->(r:ResearchQueue) RETURN r ORDER BY r.created_at DESC`, { uid });
+      const remRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_REMINDER]->(r:Reminder) RETURN r ORDER BY r.created_at DESC`, { uid });
 
-    const exportData = {
-      exported_at: new Date().toISOString(),
-      user_id: uid,
-      version: '2.0.0',
-      stats: {
-        bookmarks: bookmarks.length,
-        notes: notes.length,
-        highlights: highlights.length,
-        research: research.length,
-        reminders: reminders.length,
-        total: bookmarks.length + notes.length + highlights.length + research.length + reminders.length,
-      },
-      data: { bookmarks, notes, highlights, research, reminders },
-    };
+      const bookmarks = bmRes.records.map(r => r.get('b').properties);
+      const notes = notesRes.records.map(r => r.get('n').properties);
+      const highlights = hlRes.records.map(r => r.get('h').properties);
+      const research = resRes.records.map(r => r.get('r').properties);
+      const reminders = remRes.records.map(r => r.get('r').properties);
 
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="easy-rewind-export-${new Date().toISOString().slice(0, 10)}.json"`
-    );
-    return res.json(exportData);
+      const exportData = {
+        exported_at: new Date().toISOString(),
+        user_id: uid,
+        version: '2.0.0',
+        stats: {
+          bookmarks: bookmarks.length,
+          notes: notes.length,
+          highlights: highlights.length,
+          research: research.length,
+          reminders: reminders.length,
+          total: bookmarks.length + notes.length + highlights.length + research.length + reminders.length,
+        },
+        data: { bookmarks, notes, highlights, research, reminders },
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="easy-rewind-export-${new Date().toISOString().slice(0, 10)}.json"`);
+      return res.json(exportData);
+    } finally {
+      await session.close();
+    }
   } catch (err) {
     console.error('[Export Error]', err.message);
     return res.status(500).json({ error: 'Export failed.' });
@@ -459,111 +495,75 @@ router.get('/export', (req, res) => {
 });
 
 // POST /api/import — Import data from JSON export
-router.post('/import', (req, res) => {
+router.post('/import', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
     const { data } = req.body;
 
     if (!data || typeof data !== 'object') {
-      return res
-        .status(400)
-        .json({ error: 'Invalid import data. Expected { data: { bookmarks, notes, highlights, ... } }' });
+      return res.status(400).json({ error: 'Invalid import data. Expected { data: { bookmarks, notes, highlights, ... } }' });
     }
 
     const imported = { bookmarks: 0, notes: 0, highlights: 0, research: 0, reminders: 0 };
 
-    const insertBookmark = database.prepare(
-      `INSERT OR IGNORE INTO bookmarks (user_id, url, title, topic, notes, remind_at, reminded, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    for (const b of data.bookmarks || []) {
-      insertBookmark.run(
-        uid,
-        b.url,
-        b.title,
-        b.topic,
-        b.notes || '',
-        b.remind_at || null,
-        b.reminded || 0,
-        b.created_at
-      );
-      imported.bookmarks++;
-    }
+    try {
+      for (const b of data.bookmarks || []) {
+        await session.run(
+          `MERGE (u:User {id: $uid})
+           MERGE (bk:Bookmark {url: $url, user_id: $uid})
+           ON CREATE SET bk.id = randomUUID(), bk.title = $title, bk.topic = $topic, bk.notes = $notes, bk.remind_at = $remindAt, bk.reminded = $reminded, bk.created_at = coalesce(datetime($createdAt), datetime())
+           MERGE (u)-[:HAS_BOOKMARK]->(bk)`,
+          { uid, url: b.url, title: b.title || '', topic: b.topic || '', notes: b.notes || '', remindAt: b.remind_at || null, reminded: b.reminded || 0, createdAt: b.created_at }
+        );
+        imported.bookmarks++;
+      }
 
-    const insertNote = database.prepare(
-      `INSERT OR IGNORE INTO notes (user_id, content, source_url, source_title, remind_at, reminded, completed, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    for (const n of data.notes || []) {
-      insertNote.run(
-        uid,
-        n.content,
-        n.source_url || null,
-        n.source_title || null,
-        n.remind_at || null,
-        n.reminded || 0,
-        n.completed || 0,
-        n.created_at
-      );
-      imported.notes++;
-    }
+      for (const n of data.notes || []) {
+        await session.run(
+          `MERGE (u:User {id: $uid})
+           CREATE (nt:Note {id: randomUUID(), content: $content, source_url: $sourceUrl, source_title: $sourceTitle, remind_at: $remindAt, reminded: $reminded, completed: $completed, created_at: coalesce(datetime($createdAt), datetime())})
+           CREATE (u)-[:HAS_NOTE]->(nt)`,
+          { uid, content: n.content || '', sourceUrl: n.source_url || null, sourceTitle: n.source_title || null, remindAt: n.remind_at || null, reminded: n.reminded || 0, completed: n.completed || 0, createdAt: n.created_at }
+        );
+        imported.notes++;
+      }
 
-    const insertHighlight = database.prepare(
-      `INSERT OR IGNORE INTO highlights (user_id, url, page_title, text, context, color, tags, note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    for (const h of data.highlights || []) {
-      insertHighlight.run(
-        uid,
-        h.url,
-        h.page_title || '',
-        h.text,
-        h.context || null,
-        h.color || 'yellow',
-        h.tags || '',
-        h.note || '',
-        h.created_at
-      );
-      imported.highlights++;
-    }
+      for (const h of data.highlights || []) {
+        await session.run(
+          `MERGE (u:User {id: $uid})
+           CREATE (hl:Highlight {id: randomUUID(), url: $url, page_title: $pageTitle, text: $text, context: $context, color: $color, tags: $tags, note: $note, created_at: coalesce(datetime($createdAt), datetime())})
+           CREATE (u)-[:HAS_HIGHLIGHT]->(hl)`,
+          { uid, url: h.url || '', pageTitle: h.page_title || '', text: h.text || '', context: h.context || null, color: h.color || 'yellow', tags: h.tags || '', note: h.note || '', createdAt: h.created_at }
+        );
+        imported.highlights++;
+      }
 
-    const insertResearch = database.prepare(
-      `INSERT OR IGNORE INTO research_queue (user_id, url, title, user_notes, research_result, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-    for (const r of data.research || []) {
-      insertResearch.run(
-        uid,
-        r.url,
-        r.title || '',
-        r.user_notes || null,
-        r.research_result || null,
-        r.status || 'pending',
-        r.created_at
-      );
-      imported.research++;
-    }
+      for (const r of data.research || []) {
+        await session.run(
+          `MERGE (u:User {id: $uid})
+           CREATE (rq:ResearchQueue {id: randomUUID(), url: $url, title: $title, user_notes: $userNotes, research_result: $result, status: $status, created_at: coalesce(datetime($createdAt), datetime())})
+           CREATE (u)-[:HAS_RESEARCH]->(rq)`,
+          { uid, url: r.url || '', title: r.title || '', userNotes: r.user_notes || null, result: r.research_result || null, status: r.status || 'pending', createdAt: r.created_at }
+        );
+        imported.research++;
+      }
 
-    const insertReminder = database.prepare(
-      `INSERT OR IGNORE INTO reminders (user_id, reminder_type, reference_type, reference_id, title, message, remind_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    for (const r of data.reminders || []) {
-      insertReminder.run(
-        uid,
-        'imported',
-        r.reference_type || null,
-        r.reference_id || null,
-        r.title,
-        r.message || null,
-        r.remind_at,
-        r.created_at
-      );
-      imported.reminders++;
-    }
+      for (const r of data.reminders || []) {
+        await session.run(
+          `MERGE (u:User {id: $uid})
+           CREATE (rm:Reminder {id: randomUUID(), reminder_type: 'imported', reference_type: $refType, reference_id: $refId, title: $title, message: $message, remind_at: $remindAt, reminded: 0, dismissed: 0, created_at: coalesce(datetime($createdAt), datetime())})
+           CREATE (u)-[:HAS_REMINDER]->(rm)`,
+          { uid, refType: r.reference_type || null, refId: r.reference_id || null, title: r.title || '', message: r.message || null, remindAt: r.remind_at || null, createdAt: r.created_at }
+        );
+        imported.reminders++;
+      }
 
-    return res.json({ success: true, imported });
+      return res.json({ success: true, imported });
+    } finally {
+      await session.close();
+    }
   } catch (err) {
     console.error('[Import Error]', err.message);
     return res.status(500).json({ error: 'Import failed.' });
@@ -662,7 +662,7 @@ router.post('/settings', (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/log — Accept client-side error reports
-router.post('/log', (req, res) => {
+router.post('/log', async (req, res) => {
   const { level, component, message, stack, data } = req.body;
   const user_id = getUserId(req);
   const ts = new Date().toISOString();
@@ -672,56 +672,66 @@ router.post('/log', (req, res) => {
   const dataStr = data ? ` ${JSON.stringify(data).slice(0, 500)}` : '';
 
   switch (level) {
-    case 'ERROR':
-      console.error(`${prefix} ${message}${dataStr}${stackStr}`);
-      break;
-    case 'WARN':
-      console.warn(`${prefix} ${message}${dataStr}`);
-      break;
-    default:
-      console.log(`${prefix} ${message}${dataStr}`);
+    case 'ERROR': console.error(`${prefix} ${message}${dataStr}${stackStr}`); break;
+    case 'WARN': console.warn(`${prefix} ${message}${dataStr}`); break;
+    default: console.log(`${prefix} ${message}${dataStr}`);
   }
 
   try {
     const database = getDb();
-    database
-      .prepare(
-        `
-      INSERT INTO error_log (user_id, level, component, message, stack, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `
-      )
-      .run(
-        user_id,
-        (level || 'INFO').slice(0, 10),
-        (component || 'client').slice(0, 50),
-        (message || '').slice(0, 500),
-        (stack || '').slice(0, 2000),
-        data ? JSON.stringify(data).slice(0, 2000) : null
+    const session = database.session();
+    try {
+      await session.run(
+        `CREATE (e:ErrorLog {
+          id: randomUUID(),
+          user_id: $userId,
+          level: $level,
+          component: $component,
+          message: $message,
+          stack: $stack,
+          metadata: $metadata,
+          created_at: datetime()
+        })`,
+        {
+          userId: user_id,
+          level: (level || 'INFO').slice(0, 10),
+          component: (component || 'client').slice(0, 50),
+          message: (message || '').slice(0, 500),
+          stack: (stack || '').slice(0, 2000),
+          metadata: data ? JSON.stringify(data).slice(0, 2000) : null
+        }
       );
-  } catch (_) {
-    /* best-effort */
-  }
+    } finally {
+      await session.close();
+    }
+  } catch (_) { /* best-effort */ }
 
   return res.json({ success: true });
 });
 
 // GET /api/logs — Retrieve recent error logs
-router.get('/logs', (req, res) => {
+router.get('/logs', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   const level = req.query.level || null;
   try {
     const database = getDb();
-    let query = 'SELECT * FROM error_log';
-    const params = [];
-    if (level) {
-      query += ' WHERE level = ?';
-      params.push(level.toUpperCase());
+    const session = database.session();
+    try {
+      let whereClause = '';
+      const params = { limit: neo4j.int(limit) };
+      if (level) {
+        whereClause = 'WHERE e.level = $level';
+        params.level = level.toUpperCase();
+      }
+      const result = await session.run(
+        `MATCH (e:ErrorLog) ${whereClause} RETURN e ORDER BY e.created_at DESC LIMIT $limit`,
+        params
+      );
+      const logs = result.records.map(r => r.get('e').properties);
+      return res.json({ logs: logs || [], total: logs.length });
+    } finally {
+      await session.close();
     }
-    query += ' ORDER BY created_at DESC LIMIT ?';
-    params.push(limit);
-    const logs = database.prepare(query).all(...params);
-    return res.json({ logs: logs || [], total: logs.length });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to load logs.' });
   }

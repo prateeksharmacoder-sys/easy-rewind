@@ -7,7 +7,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+const neo4j = require('neo4j-driver');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios = require('axios');
 
@@ -25,261 +25,55 @@ const config = {
   embedProvider: 'auto',
 };
 
-let db = null;
+let db = null; // This will hold the Neo4j driver
 let genAI = null;
 
 // ─────────────────────────────────────────────
-// SQLite Database Setup
+// Neo4j Database Setup
 // ─────────────────────────────────────────────
 function getDb() {
   if (db) return db;
 
-  const dataDir = path.join(__dirname, '..', 'data');
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
+  const uri = process.env.NEO4J_URI || 'neo4j://localhost:7687';
+  const user = process.env.NEO4J_USERNAME || 'neo4j';
+  const password = process.env.NEO4J_PASSWORD || 'password';
 
-  const dbPath = path.join(dataDir, 'easy-rewind.db');
-  db = new Database(dbPath);
-
-  // Enable WAL mode for better concurrent performance
-  db.pragma('journal_mode = WAL');
-
-  // ─── Create Tables ──────────────────────────
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS bookmarks (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     TEXT    NOT NULL DEFAULT 'anonymous',
-      url         TEXT    NOT NULL,
-      title       TEXT    NOT NULL DEFAULT '',
-      topic       TEXT    NOT NULL,
-      notes       TEXT    DEFAULT '',
-      remind_at   TEXT,
-      reminded    INTEGER DEFAULT 0,
-      created_at  TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS cache (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      term        TEXT    NOT NULL UNIQUE,
-      definition  TEXT    NOT NULL,
-      created_at  TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS search_log (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     TEXT    NOT NULL DEFAULT 'anonymous',
-      query       TEXT    NOT NULL,
-      found       INTEGER NOT NULL DEFAULT 1,
-      created_at  TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS notes (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id       TEXT    NOT NULL DEFAULT 'anonymous',
-      content       TEXT    NOT NULL,
-      source_url    TEXT,
-      source_title  TEXT,
-      remind_at     TEXT,
-      reminded      INTEGER DEFAULT 0,
-      reminder_note TEXT,
-      completed     INTEGER DEFAULT 0,
-      created_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS reminders (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id        TEXT    NOT NULL DEFAULT 'anonymous',
-      reminder_type  TEXT    DEFAULT 'custom',
-      reference_type TEXT,
-      reference_id   INTEGER,
-      title          TEXT    NOT NULL,
-      message        TEXT,
-      remind_at      TEXT    NOT NULL,
-      reminded       INTEGER DEFAULT 0,
-      dismissed      INTEGER DEFAULT 0,
-      created_at     TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
-      repeat_interval_days INTEGER DEFAULT 0,
-      repeat_count   INTEGER DEFAULT 0,
-      max_repeats    INTEGER,
-      next_review_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS push_subscriptions (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     TEXT    NOT NULL DEFAULT 'anonymous',
-      endpoint    TEXT    NOT NULL,
-      keys        TEXT,
-      created_at  TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS research_queue (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id          TEXT    NOT NULL DEFAULT 'anonymous',
-      url              TEXT    NOT NULL,
-      title            TEXT,
-      user_notes       TEXT,
-      research_result  TEXT,
-      status           TEXT    DEFAULT 'pending',
-      error_message    TEXT,
-      remind_when_done INTEGER DEFAULT 1,
-      created_at       TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
-      completed_at     TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS highlights (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     TEXT    NOT NULL DEFAULT 'anonymous',
-      url         TEXT    NOT NULL,
-      page_title  TEXT    DEFAULT '',
-      text        TEXT    NOT NULL,
-      context     TEXT,
-      color       TEXT    DEFAULT 'yellow',
-      tags        TEXT    DEFAULT '',
-      note        TEXT    DEFAULT '',
-      created_at  TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS items (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id          TEXT    NOT NULL DEFAULT 'anonymous',
-      url              TEXT,
-      title            TEXT     DEFAULT '',
-      content          TEXT     DEFAULT '',
-      ai_summary       TEXT     DEFAULT '',
-      tags             TEXT     DEFAULT '',
-      embedding        TEXT,
-      source_type      TEXT     DEFAULT 'web',
-      memory_score     REAL    DEFAULT 0.5,
-      interaction_count INTEGER DEFAULT 0,
-      last_interaction TEXT,
-      created_at       TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS item_tags (
-      id       INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id  INTEGER NOT NULL,
-      tag      TEXT    NOT NULL,
-      UNIQUE(item_id, tag)
-    );
-
-    CREATE TABLE IF NOT EXISTS memory_connections (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id        TEXT    NOT NULL DEFAULT 'anonymous',
-      source_item_id INTEGER NOT NULL,
-      target_item_id INTEGER NOT NULL,
-      relationship   TEXT    DEFAULT 'related',
-      confidence     REAL   DEFAULT 0.5,
-      source         TEXT    DEFAULT 'manual',
-      auto_discovered INTEGER DEFAULT 0,
-      created_at     TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
-      UNIQUE(source_item_id, target_item_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS error_log (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     TEXT    NOT NULL DEFAULT 'anonymous',
-      level       TEXT    DEFAULT 'INFO',
-      component   TEXT    DEFAULT 'client',
-      message     TEXT,
-      stack       TEXT,
-      metadata    TEXT,
-      created_at  TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS flashcards (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id          TEXT    NOT NULL DEFAULT 'anonymous',
-      term             TEXT    NOT NULL,
-      definition       TEXT    NOT NULL DEFAULT '',
-      source           TEXT    DEFAULT 'manual',
-      source_id        INTEGER,
-      source_url       TEXT,
-      ease_factor      REAL    DEFAULT 2.5,
-      interval_days    INTEGER DEFAULT 0,
-      repetitions      INTEGER DEFAULT 0,
-      next_review_at   TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')),
-      last_reviewed_at TEXT,
-      created_at       TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS quiz_results (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id       TEXT    NOT NULL DEFAULT 'anonymous',
-      item_id       INTEGER NOT NULL,
-      item_type     TEXT    NOT NULL,
-      correct       INTEGER NOT NULL DEFAULT 0,
-      time_spent_ms INTEGER,
-      quizzed_at    TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS digests (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id         TEXT    NOT NULL DEFAULT 'anonymous',
-      title           TEXT    NOT NULL,
-      summary         TEXT    DEFAULT '',
-      period_start    TEXT    NOT NULL,
-      period_end      TEXT    NOT NULL,
-      bookmark_count  INTEGER DEFAULT 0,
-      note_count      INTEGER DEFAULT 0,
-      highlight_count INTEGER DEFAULT 0,
-      flashcard_count INTEGER DEFAULT 0,
-      quiz_accuracy   REAL    DEFAULT 0,
-      top_topics      TEXT    DEFAULT '[]',
-      top_items       TEXT    DEFAULT '[]',
-      sent_at         TEXT,
-      created_at      TEXT    NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    );
-
-    CREATE TABLE IF NOT EXISTS items_fts (
-      id      INTEGER PRIMARY KEY,
-      title   TEXT,
-      content TEXT,
-      tags    TEXT
-    );
-  `);
-
-  // ─── Create Indexes ──────────────────────────
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id    ON bookmarks (user_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_bookmarks_topic      ON bookmarks (user_id, topic);
-    CREATE INDEX IF NOT EXISTS idx_notes_user_id        ON notes (user_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_reminders_user_id    ON reminders (user_id, remind_at);
-    CREATE INDEX IF NOT EXISTS idx_reminders_pending    ON reminders (remind_at) WHERE reminded = 0 AND dismissed = 0;
-    CREATE INDEX IF NOT EXISTS idx_research_user        ON research_queue (user_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_search_log_user      ON search_log (user_id);
-    CREATE INDEX IF NOT EXISTS idx_cache_term           ON cache (term);
-    CREATE INDEX IF NOT EXISTS idx_items_user_created   ON items (user_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_item_tags_tag        ON item_tags (tag);
-    CREATE INDEX IF NOT EXISTS idx_highlights_user      ON highlights (user_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_connections_user     ON memory_connections (user_id);
-    CREATE INDEX IF NOT EXISTS idx_error_log_user       ON error_log (user_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_flashcards_user      ON flashcards (user_id, next_review_at);
-    CREATE INDEX IF NOT EXISTS idx_flashcards_due       ON flashcards (next_review_at);
-    CREATE INDEX IF NOT EXISTS idx_quiz_user_date       ON quiz_results (user_id, quizzed_at);
-    CREATE INDEX IF NOT EXISTS idx_quiz_item            ON quiz_results (item_id, item_type);
-    CREATE INDEX IF NOT EXISTS idx_digests_user          ON digests (user_id, created_at DESC);
-  `);
-
-  // ─── Migrations (for existing databases) ────
   try {
-    db.exec(`ALTER TABLE memory_connections ADD COLUMN source TEXT DEFAULT 'manual'`);
-  } catch (_) {
-    /* column already exists */
+    db = neo4j.driver(uri, neo4j.auth.basic(user, password));
+    console.log(`[DB] Neo4j Driver initialized for ${uri}`);
+
+    // Create constraints and indexes asynchronously
+    const session = db.session();
+    
+    const constraints = [
+      'CREATE CONSTRAINT IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE',
+      'CREATE CONSTRAINT IF NOT EXISTS FOR (c:Cache) REQUIRE c.term IS UNIQUE',
+      'CREATE INDEX IF NOT EXISTS FOR (b:Bookmark) ON (b.created_at)',
+      'CREATE INDEX IF NOT EXISTS FOR (n:Note) ON (n.created_at)',
+      'CREATE INDEX IF NOT EXISTS FOR (r:Reminder) ON (r.remind_at)',
+      'CREATE INDEX IF NOT EXISTS FOR (i:Item) ON (i.url)',
+      'CREATE INDEX IF NOT EXISTS FOR (h:Highlight) ON (h.url)'
+    ];
+
+    const runConstraints = async () => {
+      try {
+        for (const query of constraints) {
+          await session.run(query);
+        }
+        console.log('[DB] Neo4j Constraints & Indexes verified.');
+      } catch (err) {
+        console.warn('[DB] Could not create constraints:', err.message);
+      } finally {
+        await session.close();
+      }
+    };
+    
+    runConstraints();
+
+  } catch (err) {
+    console.error('[DB] Failed to initialize Neo4j:', err);
   }
 
-  // Try to create the FTS virtual table (best-effort — SQLite version dependent)
-  try {
-    db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
-        title, content, tags, content='items', content_rowid='id'
-      );
-    `);
-  } catch (_) {
-    /* FTS5 not available — hybrid search falls back to LIKE queries */
-  }
-
-  console.log(`[DB] SQLite ready at ${dbPath}`);
   return db;
 }
 
@@ -405,7 +199,7 @@ function sanitizeUserId(value) {
   return cleaned || config.profileUserId || 'anonymous';
 }
 
-function createReminder(database, userId, reminder) {
+async function createReminder(database, userId, reminder) {
   const remindAt = normalizeDate(reminder.remind_at) || new Date().toISOString();
   const repeatIntervalDays = Math.max(0, parseInt(reminder.repeat_interval_days) || 0);
   const maxRepeats =
@@ -414,28 +208,48 @@ function createReminder(database, userId, reminder) {
       : Math.max(0, parseInt(reminder.max_repeats));
   const repeatCount = Math.max(0, parseInt(reminder.repeat_count) || 0);
 
-  return database
-    .prepare(
+  const session = database.session();
+  try {
+    const result = await session.run(
       `
-    INSERT INTO reminders (
-      user_id, reminder_type, reference_type, reference_id, title, message,
-      remind_at, repeat_interval_days, repeat_count, max_repeats, next_review_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `
-    )
-    .run(
-      userId,
-      reminder.reminder_type || 'custom',
-      reminder.reference_type || null,
-      reminder.reference_id || null,
-      sanitize(reminder.title || 'Reminder', 200),
-      sanitize(reminder.message || '', 1000),
-      remindAt,
-      repeatIntervalDays || null,
-      repeatCount,
-      maxRepeats,
-      reminder.next_review_at || null
+      MATCH (u:User {id: $userId})
+      CREATE (r:Reminder {
+        id: randomUUID(),
+        reminder_type: $reminder_type,
+        reference_type: $reference_type,
+        reference_id: $reference_id,
+        title: $title,
+        message: $message,
+        remind_at: datetime($remind_at),
+        repeat_interval_days: $repeat_interval_days,
+        repeat_count: $repeat_count,
+        max_repeats: $max_repeats,
+        next_review_at: $next_review_at,
+        reminded: 0,
+        dismissed: 0,
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_REMINDER]->(r)
+      RETURN r
+      `,
+      {
+        userId,
+        reminder_type: reminder.reminder_type || 'custom',
+        reference_type: reminder.reference_type || null,
+        reference_id: reminder.reference_id ? String(reminder.reference_id) : null,
+        title: sanitize(reminder.title || 'Reminder', 200),
+        message: sanitize(reminder.message || '', 1000),
+        remind_at: remindAt,
+        repeat_interval_days: repeatIntervalDays || null,
+        repeat_count: repeatCount,
+        max_repeats: maxRepeats,
+        next_review_at: reminder.next_review_at ? reminder.next_review_at : null
+      }
     );
+    return result.records[0] ? result.records[0].get('r').properties : null;
+  } finally {
+    await session.close();
+  }
 }
 
 /**
@@ -483,7 +297,7 @@ function calculateNextReview(quality, card = {}) {
   };
 }
 
-function scheduleNextReview(database, reminder) {
+async function scheduleNextReview(database, reminder) {
   if (!config.spacedReviewEnabled) return null;
   const intervalDays = parseInt(reminder.repeat_interval_days) || config.reviewIntervalDays || 3;
   const maxRepeats =
@@ -492,7 +306,7 @@ function scheduleNextReview(database, reminder) {
   if (!intervalDays || (maxRepeats !== null && repeatCount >= maxRepeats)) return null;
 
   const nextAt = new Date(Date.now() + intervalDays * 24 * 60 * 60 * 1000).toISOString();
-  return createReminder(database, reminder.user_id, {
+  return await createReminder(database, reminder.user_id, {
     reminder_type: reminder.reminder_type,
     reference_type: reminder.reference_type,
     reference_id: reminder.reference_id,
@@ -516,7 +330,7 @@ function isValidId(id) {
   return !isNaN(num) && num > 0 && String(num) === String(id);
 }
 
-async function sendPushNotification(userId, title, body, data = {}) {
+async function sendPushNotification(userId, title, body) {
   console.log(`[Push] Would notify ${userId}: "${title}" — ${body}`);
 }
 
@@ -709,24 +523,34 @@ Tags:`;
   }
 }
 
-function storeItemTags(database, itemId, tags, userId) {
+async function storeItemTags(database, itemId, tags) {
   if (!tags || tags.length === 0) return;
 
-  database.prepare('DELETE FROM item_tags WHERE item_id = ?').run(itemId);
+  const session = database.session();
+  try {
+    const validTags = tags.map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (validTags.length === 0) return;
 
-  const insert = database.prepare('INSERT OR IGNORE INTO item_tags (item_id, tag) VALUES (?, ?)');
-  const tx = database.transaction(tags => {
-    for (const tag of tags) {
-      insert.run(itemId, tag.trim().toLowerCase());
-    }
-  });
-  tx(tags);
-
-  const tagString = tags
-    .map(t => t.trim().toLowerCase())
-    .filter(Boolean)
-    .join(',');
-  database.prepare('UPDATE items SET tags = ? WHERE id = ?').run(tagString, itemId);
+    await session.run(
+      `
+      MATCH (i:Item {id: $itemId})
+      OPTIONAL MATCH (i)-[r:HAS_TAG]->(old:Tag)
+      DELETE r
+      WITH i
+      UNWIND $tags as tagName
+      MERGE (t:Tag {name: tagName})
+      MERGE (i)-[:HAS_TAG]->(t)
+      SET i.tags = $tagString
+      `,
+      {
+        itemId: String(itemId),
+        tags: validTags,
+        tagString: validTags.join(',')
+      }
+    );
+  } finally {
+    await session.close();
+  }
 }
 
 // ─────────────────────────────────────────────

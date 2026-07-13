@@ -63,29 +63,7 @@ async function updateLastSyncTime() {
   } catch (_) {}
 }
 
-async function syncItems() {
-  try {
-    const { easy_rewind_last_sync, easy_rewind_user_id, easy_rewind_api_base } =
-      await chrome.storage.local.get(['easy_rewind_last_sync', 'easy_rewind_user_id', 'easy_rewind_api_base']);
-    if (!easy_rewind_user_id) return;
 
-    const base = (easy_rewind_api_base || 'http://localhost:5000').replace(/\/+$/, '');
-    const since = easy_rewind_last_sync ? `?since=${encodeURIComponent(easy_rewind_last_sync)}` : '?limit=10';
-    const url = `${base}/api/items${since}`;
-
-    const response = await fetch(url, {
-      headers: { 'x-user-id': easy_rewind_user_id },
-    });
-    if (!response.ok) return;
-    const data = await response.json();
-
-    if (data.items && data.items.length > 0) {
-      const lastCount = (await chrome.storage.local.get('easy_rewind_new_items')).easy_rewind_new_items || 0;
-      await chrome.storage.local.set({ easy_rewind_new_items: lastCount + data.items.length });
-      updateLastSyncTime();
-    }
-  } catch (_) {}
-}
 
 // ─────────────────────────────────────────────
 // SMART AUTO-CAPTURE — Engagement Tracking

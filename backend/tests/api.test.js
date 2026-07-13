@@ -226,7 +226,7 @@ describe('Reminders Endpoints', () => {
 });
 
 describe('Research Endpoints', () => {
-  let researchId;
+
 
   test('POST /api/research queues research (no auto-process)', async () => {
     const res = await request(app).post('/api/research').set(headers).send({
@@ -237,7 +237,7 @@ describe('Research Endpoints', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    researchId = res.body.research.id;
+
   });
 
   test('POST /api/research rejects missing URL', async () => {

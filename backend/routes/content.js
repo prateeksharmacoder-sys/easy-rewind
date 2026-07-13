@@ -6,6 +6,7 @@
 
 const express = require('express');
 const router = express.Router();
+const neo4j = require('neo4j-driver');
 
 const {
   getDb,
@@ -22,7 +23,7 @@ const {
 // ─────────────────────────────────────────────
 // POST /api/bookmark — Save a bookmark
 // ─────────────────────────────────────────────
-router.post('/bookmark', (req, res) => {
+router.post('/bookmark', async (req, res) => {
   const { url, title, topic, notes, remind_at, remind_in_minutes, repeat_interval_days, max_repeats } = req.body;
   const user_id = getUserId(req);
 
@@ -52,29 +53,40 @@ router.post('/bookmark', (req, res) => {
   }
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const info = database
-      .prepare(
-        `
-      INSERT INTO bookmarks (url, title, topic, notes, remind_at, user_id)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `
-      )
-      .run(
-        sanitize(url, 2000),
-        sanitize(title || url, 500),
-        sanitize(topic, 200),
-        sanitize(notes || '', 1000),
-        remindAt,
-        user_id
-      );
+    const result = await session.run(
+      `
+      MERGE (u:User {id: $userId})
+      CREATE (b:Bookmark {
+        id: randomUUID(),
+        url: $url,
+        title: $title,
+        topic: $topic,
+        notes: $notes,
+        remind_at: $remindAt,
+        reminded: 0,
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_BOOKMARK]->(b)
+      RETURN b
+      `,
+      {
+        userId: user_id,
+        url: sanitize(url, 2000),
+        title: sanitize(title || url, 500),
+        topic: sanitize(topic, 200),
+        notes: sanitize(notes || '', 1000),
+        remindAt: remindAt ? remindAt : null
+      }
+    );
 
-    const bookmark = database.prepare('SELECT * FROM bookmarks WHERE id = ?').get(info.lastInsertRowid);
+    const bookmark = result.records[0] ? result.records[0].get('b').properties : null;
 
     if (remindAt && bookmark) {
       try {
-        createReminder(database, user_id, {
+        await createReminder(database, user_id, {
           reminder_type: 'bookmark_review',
           reference_type: 'bookmark',
           reference_id: bookmark.id,
@@ -91,13 +103,15 @@ router.post('/bookmark', (req, res) => {
   } catch (err) {
     console.error('[Bookmark Save Error]', err.message);
     return res.status(500).json({ error: 'Failed to save bookmark.' });
+  } finally {
+    await session.close();
   }
 });
 
 // ─────────────────────────────────────────────
 // GET /api/bookmarks — List bookmarks
 // ─────────────────────────────────────────────
-router.get('/bookmarks', (req, res) => {
+router.get('/bookmarks', async (req, res) => {
   const user_id = getUserId(req);
   const limit = Math.min(parseInt(req.query.limit) || 50, 500);
   const offset = parseInt(req.query.offset) || 0;
@@ -105,55 +119,54 @@ router.get('/bookmarks', (req, res) => {
   const topic = req.query.topic || null;
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    let whereClause = 'WHERE user_id = ?';
-    const params = [user_id];
+    let whereClause = 'WHERE u.id = $userId';
+    const params = { userId: user_id, limit: neo4j.int(limit), skip: neo4j.int(offset) };
 
     if (topic) {
-      whereClause += ' AND LOWER(topic) LIKE LOWER(?)';
-      params.push(`%${topic}%`);
+      whereClause += ' AND toLower(b.topic) CONTAINS toLower($topic)';
+      params.topic = topic;
     }
 
     let orderClause;
     switch (sort) {
-      case 'oldest':
-        orderClause = 'ORDER BY created_at ASC';
-        break;
-      case 'alphabetical':
-        orderClause = 'ORDER BY title ASC';
-        break;
-      case 'topic':
-        orderClause = 'ORDER BY topic ASC';
-        break;
-      default:
-        orderClause = 'ORDER BY created_at DESC';
+      case 'oldest': orderClause = 'ORDER BY b.created_at ASC'; break;
+      case 'alphabetical': orderClause = 'ORDER BY b.title ASC'; break;
+      case 'topic': orderClause = 'ORDER BY b.topic ASC'; break;
+      default: orderClause = 'ORDER BY b.created_at DESC';
     }
 
-    const total = database.prepare(`SELECT COUNT(*) as count FROM bookmarks ${whereClause}`).get(...params).count;
-    const bookmarks = database
-      .prepare(`SELECT * FROM bookmarks ${whereClause} ${orderClause} LIMIT ? OFFSET ?`)
-      .all(...params, limit, offset);
+    const countQuery = `MATCH (u:User)-[:HAS_BOOKMARK]->(b:Bookmark) ${whereClause} RETURN count(b) AS c`;
+    const dataQuery = `MATCH (u:User)-[:HAS_BOOKMARK]->(b:Bookmark) ${whereClause} RETURN b ${orderClause} SKIP $skip LIMIT $limit`;
+    const topicCountQuery = `MATCH (u:User {id: $userId})-[:HAS_BOOKMARK]->(b:Bookmark) RETURN count(DISTINCT toLower(b.topic)) AS c`;
 
-    const uniqueTopics = database
-      .prepare('SELECT COUNT(DISTINCT LOWER(topic)) as count FROM bookmarks WHERE user_id = ?')
-      .get(user_id).count;
+    const countRes = await session.run(countQuery, params);
+    const dataRes = await session.run(dataQuery, params);
+    const topicCountRes = await session.run(topicCountQuery, { userId: user_id });
+
+    const total = countRes.records[0] ? countRes.records[0].get('c').toNumber() : 0;
+    const bookmarks = dataRes.records.map(r => r.get('b').properties);
+    const uniqueTopics = topicCountRes.records[0] ? topicCountRes.records[0].get('c').toNumber() : 0;
 
     return res.json({
-      bookmarks: bookmarks || [],
+      bookmarks: bookmarks,
       total,
       stats: { total_bookmarks: total, unique_topics: uniqueTopics },
     });
   } catch (err) {
     console.error('[Get Bookmarks Error]', err.message);
     return res.status(500).json({ error: 'Failed to load bookmarks.' });
+  } finally {
+    await session.close();
   }
 });
 
 // ─────────────────────────────────────────────
 // GET /api/search — Search bookmarks and notes
 // ─────────────────────────────────────────────
-router.get('/search', (req, res) => {
+router.get('/search', async (req, res) => {
   const query = req.query.q;
   const user_id = getUserId(req);
 
@@ -163,70 +176,95 @@ router.get('/search', (req, res) => {
 
   const cleanQuery = sanitize(query, 200);
   const database = getDb();
-  const pattern = `%${cleanQuery}%`;
+  const session = database.session();
 
   try {
-    const results = database
-      .prepare(
-        `
-      SELECT * FROM bookmarks
-      WHERE user_id = ?
-        AND (LOWER(topic) LIKE LOWER(?) OR LOWER(title) LIKE LOWER(?) OR LOWER(url) LIKE LOWER(?) OR LOWER(notes) LIKE LOWER(?))
-      ORDER BY created_at DESC
-      LIMIT 50
-    `
-      )
-      .all(user_id, pattern, pattern, pattern, pattern);
+    const bookmarkQuery = `
+      MATCH (u:User {id: $userId})-[:HAS_BOOKMARK]->(b:Bookmark)
+      WHERE toLower(b.topic) CONTAINS toLower($q)
+         OR toLower(b.title) CONTAINS toLower($q)
+         OR toLower(b.url) CONTAINS toLower($q)
+         OR toLower(b.notes) CONTAINS toLower($q)
+      RETURN b ORDER BY b.created_at DESC LIMIT 50
+    `;
+    
+    const noteQuery = `
+      MATCH (u:User {id: $userId})-[:HAS_NOTE]->(n:Note)
+      WHERE toLower(n.content) CONTAINS toLower($q)
+         OR toLower(n.source_title) CONTAINS toLower($q)
+         OR toLower(n.source_url) CONTAINS toLower($q)
+      RETURN n ORDER BY n.created_at DESC LIMIT 20
+    `;
 
-    const noteResults = database
-      .prepare(
-        `
-      SELECT * FROM notes
-      WHERE user_id = ?
-        AND (LOWER(content) LIKE LOWER(?) OR LOWER(source_title) LIKE LOWER(?) OR LOWER(source_url) LIKE LOWER(?))
-      ORDER BY created_at DESC
-      LIMIT 20
-    `
-      )
-      .all(user_id, pattern, pattern, pattern);
+    const bRes = await session.run(bookmarkQuery, { userId: user_id, q: cleanQuery });
+    const nRes = await session.run(noteQuery, { userId: user_id, q: cleanQuery });
+
+    const results = bRes.records.map(r => r.get('b').properties);
+    const noteResults = nRes.records.map(r => r.get('n').properties);
 
     try {
-      database
-        .prepare('INSERT INTO search_log (user_id, query, found) VALUES (?, ?, ?)')
-        .run(user_id, cleanQuery, results.length > 0 || noteResults.length > 0 ? 1 : 0);
+      await session.run(
+        `CREATE (s:SearchLog {
+          id: randomUUID(),
+          query: $query,
+          found: $found,
+          created_at: datetime()
+        })
+        WITH s
+        MATCH (u:User {id: $userId})
+        CREATE (u)-[:SEARCHED]->(s)`,
+        {
+          userId: user_id,
+          query: cleanQuery,
+          found: (results.length > 0 || noteResults.length > 0) ? 1 : 0
+        }
+      );
     } catch (_) {}
 
     return res.json({
       results: results || [],
       notes: noteResults || [],
-      count: results?.length || 0,
-      notes_count: noteResults?.length || 0,
+      count: results.length,
+      notes_count: noteResults.length,
       query: cleanQuery,
     });
   } catch (err) {
     console.error('[Search Error]', err.message);
     return res.status(500).json({ error: 'Search failed.' });
+  } finally {
+    await session.close();
   }
 });
 
 // ─────────────────────────────────────────────
 // DELETE /api/bookmark/:id — Delete a bookmark
 // ─────────────────────────────────────────────
-router.delete('/bookmark/:id', (req, res) => {
+router.delete('/bookmark/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
 
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid bookmark ID is required.' });
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    database.prepare('DELETE FROM bookmarks WHERE id = ? AND user_id = ?').run(id, user_id);
-    database.prepare("DELETE FROM reminders WHERE reference_type = 'bookmark' AND reference_id = ?").run(id);
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_BOOKMARK]->(b:Bookmark {id: $id})
+      DETACH DELETE b
+    `, { userId: user_id, id: String(id) });
+    
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_REMINDER]->(r:Reminder {reference_type: 'bookmark', reference_id: $id})
+      DETACH DELETE r
+    `, { userId: user_id, id: String(id) });
+
     return res.json({ success: true, message: 'Bookmark deleted.' });
   } catch (err) {
     console.error('[Delete Bookmark Error]', err.message);
     return res.status(500).json({ error: 'Failed to delete bookmark.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -235,7 +273,7 @@ router.delete('/bookmark/:id', (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/notes — Create a quick note
-router.post('/notes', (req, res) => {
+router.post('/notes', async (req, res) => {
   const {
     content,
     source_url,
@@ -257,8 +295,6 @@ router.post('/notes', (req, res) => {
     return res.status(400).json({ error: 'Note is too short.' });
   }
 
-  const database = getDb();
-
   let remindAt = normalizeDate(remind_at);
   if (remind_in_minutes !== undefined && remind_in_minutes !== '' && !remindAt) {
     const minutes = parseInt(remind_in_minutes);
@@ -268,28 +304,42 @@ router.post('/notes', (req, res) => {
     remindAt = new Date(Date.now() + minutes * 60000).toISOString();
   }
 
-  try {
-    const info = database
-      .prepare(
-        `
-      INSERT INTO notes (user_id, content, source_url, source_title, remind_at, reminder_note)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `
-      )
-      .run(
-        user_id,
-        cleanContent,
-        sanitize(source_url || '', 2000),
-        sanitize(source_title || '', 500),
-        remindAt,
-        sanitize(reminder_note || '', 500)
-      );
+  const database = getDb();
+  const session = database.session();
 
-    const note = database.prepare('SELECT * FROM notes WHERE id = ?').get(info.lastInsertRowid);
+  try {
+    const result = await session.run(
+      `
+      MERGE (u:User {id: $userId})
+      CREATE (n:Note {
+        id: randomUUID(),
+        content: $content,
+        source_url: $source_url,
+        source_title: $source_title,
+        remind_at: $remindAt,
+        reminder_note: $reminder_note,
+        completed: 0,
+        reminded: 0,
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_NOTE]->(n)
+      RETURN n
+      `,
+      {
+        userId: user_id,
+        content: cleanContent,
+        source_url: sanitize(source_url || '', 2000),
+        source_title: sanitize(source_title || '', 500),
+        remindAt: remindAt ? remindAt : null,
+        reminder_note: sanitize(reminder_note || '', 500)
+      }
+    );
+
+    const note = result.records[0] ? result.records[0].get('n').properties : null;
 
     if (remindAt && note) {
       try {
-        createReminder(database, user_id, {
+        await createReminder(database, user_id, {
           reminder_type: 'note_action',
           reference_type: 'note',
           reference_id: note.id,
@@ -306,77 +356,104 @@ router.post('/notes', (req, res) => {
   } catch (err) {
     console.error('[Note Save Error]', err.message);
     return res.status(500).json({ error: 'Failed to save note.' });
+  } finally {
+    await session.close();
   }
 });
 
 // GET /api/notes — List notes
-router.get('/notes', (req, res) => {
+router.get('/notes', async (req, res) => {
   const user_id = getUserId(req);
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   const offset = parseInt(req.query.offset) || 0;
   const showCompleted = req.query.completed === 'true';
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    let whereClause = 'WHERE user_id = ?';
-    const params = [user_id];
+    let whereClause = 'WHERE u.id = $userId';
+    const params = { userId: user_id, limit: neo4j.int(limit), skip: neo4j.int(offset) };
 
     if (!showCompleted) {
-      whereClause += ' AND completed = 0';
+      whereClause += ' AND (n.completed = 0 OR n.completed IS NULL)';
     }
 
-    const total = database.prepare('SELECT COUNT(*) as count FROM notes ' + whereClause).get(...params).count;
-    const notes = database
-      .prepare('SELECT * FROM notes ' + whereClause + ' ORDER BY created_at DESC LIMIT ? OFFSET ?')
-      .all(...params, limit, offset);
+    const countQuery = `MATCH (u:User)-[:HAS_NOTE]->(n:Note) ${whereClause} RETURN count(n) AS c`;
+    const dataQuery = `MATCH (u:User)-[:HAS_NOTE]->(n:Note) ${whereClause} RETURN n ORDER BY n.created_at DESC SKIP $skip LIMIT $limit`;
+
+    const countRes = await session.run(countQuery, params);
+    const dataRes = await session.run(dataQuery, params);
+
+    const total = countRes.records[0] ? countRes.records[0].get('c').toNumber() : 0;
+    const notes = dataRes.records.map(r => r.get('n').properties);
 
     return res.json({ notes: notes || [], total });
   } catch (err) {
     console.error('[Get Notes Error]', err.message);
     return res.status(500).json({ error: 'Failed to load notes.' });
+  } finally {
+    await session.close();
   }
 });
 
 // PATCH /api/notes/:id/toggle — Toggle note completed status
-router.patch('/notes/:id/toggle', (req, res) => {
+router.patch('/notes/:id/toggle', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
 
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid note ID is required.' });
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const note = database.prepare('SELECT completed FROM notes WHERE id = ? AND user_id = ?').get(id, user_id);
-    if (!note) return res.status(404).json({ error: 'Note not found.' });
+    const result = await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_NOTE]->(n:Note {id: $id})
+      SET n.completed = CASE WHEN coalesce(n.completed, 0) = 0 THEN 1 ELSE 0 END
+      RETURN n.completed AS completed
+    `, { userId: user_id, id: String(id) });
 
-    const newCompleted = note.completed ? 0 : 1;
-    database.prepare('UPDATE notes SET completed = ? WHERE id = ? AND user_id = ?').run(newCompleted, id, user_id);
+    if (result.records.length === 0) return res.status(404).json({ error: 'Note not found.' });
+
+    const newCompleted = result.records[0].get('completed');
 
     return res.json({ success: true, completed: !!newCompleted });
   } catch (err) {
     console.error('[Toggle Note Error]', err.message);
     return res.status(500).json({ error: 'Failed to update note.' });
+  } finally {
+    await session.close();
   }
 });
 
 // DELETE /api/notes/:id
-router.delete('/notes/:id', (req, res) => {
+router.delete('/notes/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
 
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid note ID is required.' });
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    database.prepare('DELETE FROM notes WHERE id = ? AND user_id = ?').run(id, user_id);
-    database.prepare("DELETE FROM reminders WHERE reference_type = 'note' AND reference_id = ?").run(id);
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_NOTE]->(n:Note {id: $id})
+      DETACH DELETE n
+    `, { userId: user_id, id: String(id) });
+
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_REMINDER]->(r:Reminder {reference_type: 'note', reference_id: $id})
+      DETACH DELETE r
+    `, { userId: user_id, id: String(id) });
+
     return res.json({ success: true, message: 'Note deleted.' });
   } catch (err) {
     console.error('[Delete Note Error]', err.message);
     return res.status(500).json({ error: 'Failed to delete note.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -385,7 +462,7 @@ router.delete('/notes/:id', (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/reminders — Schedule a reminder
-router.post('/reminders', (req, res) => {
+router.post('/reminders', async (req, res) => {
   const {
     title,
     message,
@@ -419,7 +496,7 @@ router.post('/reminders', (req, res) => {
   const database = getDb();
 
   try {
-    const info = createReminder(database, user_id, {
+    const reminder = await createReminder(database, user_id, {
       title,
       message,
       remind_at: remindAt,
@@ -430,7 +507,6 @@ router.post('/reminders', (req, res) => {
       max_repeats,
     });
 
-    const reminder = database.prepare('SELECT * FROM reminders WHERE id = ?').get(info.lastInsertRowid);
     return res.json({ success: true, reminder });
   } catch (err) {
     console.error('[Reminder Save Error]', err.message);
@@ -438,35 +514,46 @@ router.post('/reminders', (req, res) => {
   }
 });
 
-// GET /api/reminders — Get due/pending reminders
-router.get('/reminders', (req, res) => {
+router.get('/reminders', async (req, res) => {
   const user_id = getUserId(req);
   const due = req.query.due === 'true';
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
 
   const database = getDb();
+  const session = database.session();
 
   try {
     let query, params;
 
     if (due) {
-      query = 'SELECT * FROM reminders WHERE user_id = ? AND remind_at <= ? AND reminded = 0 AND dismissed = 0 LIMIT ?';
-      params = [user_id, new Date().toISOString(), limit];
+      query = `
+        MATCH (u:User {id: $userId})-[:HAS_REMINDER]->(r:Reminder)
+        WHERE r.remind_at <= datetime($now) AND coalesce(r.reminded, 0) = 0 AND coalesce(r.dismissed, 0) = 0
+        RETURN r LIMIT $limit
+      `;
+      params = { userId: user_id, now: new Date().toISOString(), limit: neo4j.int(limit) };
     } else {
-      query = 'SELECT * FROM reminders WHERE user_id = ? AND dismissed = 0 ORDER BY remind_at ASC LIMIT ?';
-      params = [user_id, limit];
+      query = `
+        MATCH (u:User {id: $userId})-[:HAS_REMINDER]->(r:Reminder)
+        WHERE coalesce(r.dismissed, 0) = 0
+        RETURN r ORDER BY r.remind_at ASC LIMIT $limit
+      `;
+      params = { userId: user_id, limit: neo4j.int(limit) };
     }
 
-    const reminders = database.prepare(query).all(...params);
+    const result = await session.run(query, params);
+    const reminders = result.records.map(rec => rec.get('r').properties);
+
     return res.json({ reminders: reminders || [], total: reminders.length });
   } catch (err) {
     console.error('[Get Reminders Error]', err.message);
     return res.status(500).json({ error: 'Failed to load reminders.' });
+  } finally {
+    await session.close();
   }
 });
 
-// PATCH /api/reminders/:id — Acknowledge/dismiss/snooze a reminder
-router.patch('/reminders/:id', (req, res) => {
+router.patch('/reminders/:id', async (req, res) => {
   const { id } = req.params;
   const { reminded, dismissed, remind_at } = req.body;
   const user_id = getUserId(req);
@@ -474,55 +561,65 @@ router.patch('/reminders/:id', (req, res) => {
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid reminder ID is required.' });
 
   const database = getDb();
+  const session = database.session();
 
   try {
     const sets = [];
-    const params = [];
+    const params = { id: String(id), userId: user_id };
+
     if (reminded !== undefined) {
-      sets.push('reminded = ?');
-      params.push(reminded ? 1 : 0);
+      sets.push('r.reminded = $reminded');
+      params.reminded = reminded ? 1 : 0;
     }
     if (dismissed !== undefined) {
-      sets.push('dismissed = ?');
-      params.push(dismissed ? 1 : 0);
+      sets.push('r.dismissed = $dismissed');
+      params.dismissed = dismissed ? 1 : 0;
     }
     if (remind_at !== undefined) {
       const normalized = normalizeDate(remind_at);
       if (normalized) {
-        sets.push('remind_at = ?');
-        params.push(normalized);
-        // Reset reminded flag when rescheduling
-        sets.push('reminded = 0');
+        sets.push('r.remind_at = datetime($remind_at)');
+        params.remind_at = normalized;
+        sets.push('r.reminded = 0');
       }
     }
 
     if (sets.length === 0) return res.status(400).json({ error: 'No fields to update.' });
 
-    database
-      .prepare(`UPDATE reminders SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`)
-      .run(...params, id, user_id);
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_REMINDER]->(r:Reminder {id: $id})
+      SET ${sets.join(', ')}
+    `, params);
 
     return res.json({ success: true });
   } catch (err) {
     console.error('[Update Reminder Error]', err.message);
     return res.status(500).json({ error: 'Failed to update reminder.' });
+  } finally {
+    await session.close();
   }
 });
 
 // DELETE /api/reminders/:id
-router.delete('/reminders/:id', (req, res) => {
+router.delete('/reminders/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
 
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid reminder ID is required.' });
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    database.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?').run(id, user_id);
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_REMINDER]->(r:Reminder {id: $id})
+      DETACH DELETE r
+    `, { userId: user_id, id: String(id) });
     return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to delete reminder.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -531,23 +628,29 @@ router.delete('/reminders/:id', (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/check-reminders
-router.post('/check-reminders', (req, res) => {
+router.post('/check-reminders', async (req, res) => {
   const database = getDb();
+  const session = database.session();
 
   try {
     const now = new Date().toISOString();
 
-    const dueReminders = database
-      .prepare(
-        `
-      SELECT * FROM reminders
-      WHERE remind_at <= ?
-        AND reminded = 0
-        AND dismissed = 0
+    const result = await session.run(
+      `
+      MATCH (u:User)-[:HAS_REMINDER]->(r:Reminder)
+      WHERE r.remind_at <= datetime($now)
+        AND coalesce(r.reminded, 0) = 0
+        AND coalesce(r.dismissed, 0) = 0
+      RETURN r, u.id AS userId
       LIMIT 50
-    `
-      )
-      .all(now);
+      `,
+      { now }
+    );
+
+    const dueReminders = result.records.map(rec => ({
+      ...rec.get('r').properties,
+      user_id: rec.get('userId')
+    }));
 
     if (!dueReminders || dueReminders.length === 0) {
       return res.json({ processed: 0 });
@@ -555,19 +658,20 @@ router.post('/check-reminders', (req, res) => {
 
     const ids = dueReminders.map(r => r.id);
 
-    const updateStmt = database.prepare('UPDATE reminders SET reminded = 1 WHERE id = ?');
-    const markReminded = database.transaction(ids => {
-      for (const id of ids) {
-        updateStmt.run(id);
-      }
-    });
-    markReminded(ids);
+    await session.run(
+      `
+      MATCH (r:Reminder)
+      WHERE r.id IN $ids
+      SET r.reminded = 1
+      `,
+      { ids }
+    );
 
     const byUser = {};
     for (const reminder of dueReminders) {
       if (!byUser[reminder.user_id]) byUser[reminder.user_id] = [];
       byUser[reminder.user_id].push(reminder);
-      scheduleNextReview(database, reminder);
+      await scheduleNextReview(database, reminder);
     }
 
     for (const [userId, reminders] of Object.entries(byUser)) {
@@ -583,6 +687,8 @@ router.post('/check-reminders', (req, res) => {
   } catch (err) {
     console.error('[Check Reminders Error]', err.message);
     return res.status(500).json({ error: 'Failed to check reminders.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -591,7 +697,7 @@ router.post('/check-reminders', (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/flashcards — Create a flashcard
-router.post('/flashcards', (req, res) => {
+router.post('/flashcards', async (req, res) => {
   const { term, definition, source, source_id, source_url } = req.body;
   const user_id = getUserId(req);
 
@@ -603,34 +709,50 @@ router.post('/flashcards', (req, res) => {
   }
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const info = database
-      .prepare(
-        `
-      INSERT INTO flashcards (user_id, term, definition, source, source_id, source_url)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `
-      )
-      .run(
-        user_id,
-        sanitize(term, 500),
-        sanitize(definition, 5000),
-        sanitize(source || 'manual', 50),
-        isValidId(source_id) ? parseInt(source_id) : null,
-        sanitize(source_url || '', 2000)
-      );
+    const result = await session.run(
+      `
+      MERGE (u:User {id: $userId})
+      CREATE (f:Flashcard {
+        id: randomUUID(),
+        term: $term,
+        definition: $definition,
+        source: $source,
+        source_id: $source_id,
+        source_url: $source_url,
+        ease_factor: 2.5,
+        interval_days: 0,
+        repetitions: 0,
+        next_review_at: datetime(),
+        created_at: datetime()
+      })
+      CREATE (u)-[:HAS_FLASHCARD]->(f)
+      RETURN f
+      `,
+      {
+        userId: user_id,
+        term: sanitize(term, 500),
+        definition: sanitize(definition, 5000),
+        source: sanitize(source || 'manual', 50),
+        source_id: isValidId(source_id) ? String(source_id) : null,
+        source_url: sanitize(source_url || '', 2000)
+      }
+    );
 
-    const flashcard = database.prepare('SELECT * FROM flashcards WHERE id = ?').get(info.lastInsertRowid);
+    const flashcard = result.records[0] ? result.records[0].get('f').properties : null;
     return res.json({ success: true, flashcard });
   } catch (err) {
     console.error('[Flashcard Save Error]', err.message);
     return res.status(500).json({ error: 'Failed to create flashcard.' });
+  } finally {
+    await session.close();
   }
 });
 
 // GET /api/flashcards — List flashcards
-router.get('/flashcards', (req, res) => {
+router.get('/flashcards', async (req, res) => {
   const user_id = getUserId(req);
   const due = req.query.due === 'true';
   const limit = Math.min(parseInt(req.query.limit) || 50, 500);
@@ -638,30 +760,33 @@ router.get('/flashcards', (req, res) => {
   const source = req.query.source || null;
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    let whereClause = 'WHERE user_id = ?';
-    const params = [user_id];
+    let whereClause = 'WHERE u.id = $userId';
+    const params = { userId: user_id, limit: neo4j.int(limit), skip: neo4j.int(offset) };
 
     if (due) {
-      whereClause += ' AND next_review_at <= ?';
-      params.push(new Date().toISOString());
+      whereClause += ' AND f.next_review_at <= datetime($now)';
+      params.now = new Date().toISOString();
     }
 
     if (source) {
-      whereClause += ' AND source = ?';
-      params.push(source);
+      whereClause += ' AND f.source = $source';
+      params.source = source;
     }
 
-    const total = database.prepare(`SELECT COUNT(*) as count FROM flashcards ${whereClause}`).get(...params).count;
-    const flashcards = database
-      .prepare(`SELECT * FROM flashcards ${whereClause} ORDER BY next_review_at ASC LIMIT ? OFFSET ?`)
-      .all(...params, limit, offset);
+    const countQuery = `MATCH (u:User)-[:HAS_FLASHCARD]->(f:Flashcard) ${whereClause} RETURN count(f) AS c`;
+    const dataQuery = `MATCH (u:User)-[:HAS_FLASHCARD]->(f:Flashcard) ${whereClause} RETURN f ORDER BY f.next_review_at ASC SKIP $skip LIMIT $limit`;
+    const dueCountQuery = `MATCH (u:User {id: $userId})-[:HAS_FLASHCARD]->(f:Flashcard) WHERE f.next_review_at <= datetime($dueNow) RETURN count(f) AS c`;
 
-    // Count total due across all flashcards for this user
-    const dueCount = database
-      .prepare('SELECT COUNT(*) as count FROM flashcards WHERE user_id = ? AND next_review_at <= ?')
-      .get(user_id, new Date().toISOString()).count;
+    const countRes = await session.run(countQuery, params);
+    const dataRes = await session.run(dataQuery, params);
+    const dueCountRes = await session.run(dueCountQuery, { userId: user_id, dueNow: new Date().toISOString() });
+
+    const total = countRes.records[0] ? countRes.records[0].get('c').toNumber() : 0;
+    const flashcards = dataRes.records.map(r => r.get('f').properties);
+    const dueCount = dueCountRes.records[0] ? dueCountRes.records[0].get('c').toNumber() : 0;
 
     return res.json({
       flashcards: flashcards || [],
@@ -671,11 +796,13 @@ router.get('/flashcards', (req, res) => {
   } catch (err) {
     console.error('[Get Flashcards Error]', err.message);
     return res.status(500).json({ error: 'Failed to load flashcards.' });
+  } finally {
+    await session.close();
   }
 });
 
 // PATCH /api/flashcards/:id/review — Review a card (SM-2)
-router.patch('/flashcards/:id/review', (req, res) => {
+router.patch('/flashcards/:id/review', async (req, res) => {
   const { id } = req.params;
   const { quality } = req.body;
   const user_id = getUserId(req);
@@ -688,131 +815,152 @@ router.patch('/flashcards/:id/review', (req, res) => {
   }
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    const card = database.prepare('SELECT * FROM flashcards WHERE id = ? AND user_id = ?').get(id, user_id);
-    if (!card) return res.status(404).json({ error: 'Flashcard not found.' });
+    const getRes = await session.run(`MATCH (u:User {id: $userId})-[:HAS_FLASHCARD]->(f:Flashcard {id: $id}) RETURN f`, { userId: user_id, id: String(id) });
+    if (getRes.records.length === 0) return res.status(404).json({ error: 'Flashcard not found.' });
 
+    const card = getRes.records[0].get('f').properties;
     const result = calculateNextReview(q, card);
 
-    database
-      .prepare(
-        `
-      UPDATE flashcards
-      SET ease_factor = ?, interval_days = ?, repetitions = ?,
-          next_review_at = ?, last_reviewed_at = ?
-      WHERE id = ? AND user_id = ?
-    `
-      )
-      .run(
-        result.ease_factor,
-        result.interval_days,
-        result.repetitions,
-        result.next_review_at,
-        new Date().toISOString(),
-        id,
-        user_id
-      );
+    const updateRes = await session.run(
+      `
+      MATCH (u:User {id: $userId})-[:HAS_FLASHCARD]->(f:Flashcard {id: $id})
+      SET f.ease_factor = $ease,
+          f.interval_days = $interval,
+          f.repetitions = $reps,
+          f.next_review_at = datetime($nextReview),
+          f.last_reviewed_at = datetime($now)
+      RETURN f
+      `,
+      {
+        userId: user_id,
+        id: String(id),
+        ease: result.ease_factor,
+        interval: result.interval_days,
+        reps: result.repetitions,
+        nextReview: result.next_review_at,
+        now: new Date().toISOString()
+      }
+    );
 
-    const updated = database.prepare('SELECT * FROM flashcards WHERE id = ?').get(id);
+    const updated = updateRes.records[0].get('f').properties;
     return res.json({ success: true, flashcard: updated, review: result });
   } catch (err) {
     console.error('[Review Flashcard Error]', err.message);
     return res.status(500).json({ error: 'Failed to review flashcard.' });
+  } finally {
+    await session.close();
   }
 });
 
 // DELETE /api/flashcards/:id — Delete a flashcard
-router.delete('/flashcards/:id', (req, res) => {
+router.delete('/flashcards/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
 
   if (!isValidId(id)) return res.status(400).json({ error: 'Valid flashcard ID is required.' });
 
   const database = getDb();
+  const session = database.session();
 
   try {
-    database.prepare('DELETE FROM flashcards WHERE id = ? AND user_id = ?').run(id, user_id);
+    await session.run(`
+      MATCH (u:User {id: $userId})-[:HAS_FLASHCARD]->(f:Flashcard {id: $id})
+      DETACH DELETE f
+    `, { userId: user_id, id: String(id) });
     return res.json({ success: true, message: 'Flashcard deleted.' });
   } catch (err) {
     console.error('[Delete Flashcard Error]', err.message);
     return res.status(500).json({ error: 'Failed to delete flashcard.' });
+  } finally {
+    await session.close();
   }
 });
 
-// POST /api/flashcards/generate — Auto-generate flashcards from existing content
-router.post('/flashcards/generate', (req, res) => {
-  const { source_type, source_ids } = req.body; // source_type: 'bookmark' | 'item' | 'search_log'
+router.post('/flashcards/generate', async (req, res) => {
+  const { source_type, source_ids } = req.body;
   const user_id = getUserId(req);
 
   const database = getDb();
+  const session = database.session();
 
   try {
     let inserted = 0;
 
     if (source_type === 'bookmark' || !source_type) {
-      let bookmarks;
+      let bookmarks = [];
       if (source_ids && Array.isArray(source_ids) && source_ids.length > 0) {
-        const placeholders = source_ids.map(() => '?').join(',');
-        bookmarks = database
-          .prepare(`SELECT * FROM bookmarks WHERE user_id = ? AND id IN (${placeholders})`)
-          .all(user_id, ...source_ids);
+        const result = await session.run(
+          `MATCH (u:User {id: $userId})-[:HAS_BOOKMARK]->(b:Bookmark) WHERE b.id IN $sourceIds RETURN b`,
+          { userId: user_id, sourceIds: source_ids.map(String) }
+        );
+        bookmarks = result.records.map(r => r.get('b').properties);
       } else {
-        // Take top 20 bookmarks that don't already have a flashcard
-        bookmarks = database
-          .prepare(
-            `
-          SELECT b.* FROM bookmarks b
-          WHERE b.user_id = ?
-            AND b.topic != ''
-            AND b.id NOT IN (SELECT source_id FROM flashcards WHERE user_id = ? AND source = 'bookmark')
-          ORDER BY b.created_at DESC LIMIT 20
-        `
-          )
-          .all(user_id, user_id);
+        const result = await session.run(
+          `
+          MATCH (u:User {id: $userId})-[:HAS_BOOKMARK]->(b:Bookmark)
+          WHERE coalesce(b.topic, '') <> ''
+            AND NOT EXISTS { MATCH (u)-[:HAS_FLASHCARD]->(f:Flashcard {source: 'bookmark', source_id: b.id}) }
+          RETURN b ORDER BY b.created_at DESC LIMIT 20
+          `,
+          { userId: user_id }
+        );
+        bookmarks = result.records.map(r => r.get('b').properties);
       }
 
-      const insertStmt = database.prepare(`
-        INSERT OR IGNORE INTO flashcards (user_id, term, definition, source, source_id, source_url)
-        VALUES (?, ?, ?, 'bookmark', ?, ?)
-      `);
-
       for (const bm of bookmarks) {
-        const result = insertStmt.run(
-          user_id,
-          sanitize(bm.title || bm.topic, 500),
-          sanitize(bm.notes || bm.topic || 'Bookmarked page', 5000),
-          bm.id,
-          sanitize(bm.url || '', 2000)
+        const res = await session.run(
+          `
+          MATCH (u:User {id: $userId})
+          MERGE (f:Flashcard {source: 'bookmark', source_id: $sourceId, user_id: $userId})
+          ON CREATE SET
+            f.id = randomUUID(),
+            f.term = $term,
+            f.definition = $definition,
+            f.source_url = $sourceUrl,
+            f.ease_factor = 2.5,
+            f.interval_days = 0,
+            f.repetitions = 0,
+            f.next_review_at = datetime(),
+            f.created_at = datetime()
+          WITH f, u
+          MATCH (f) WHERE f.created_at = datetime() OR f.created_at IS NOT NULL
+          MERGE (u)-[:HAS_FLASHCARD]->(f)
+          RETURN f
+          `,
+          {
+            userId: user_id,
+            term: sanitize(bm.title || bm.topic, 500),
+            definition: sanitize(bm.notes || bm.topic || 'Bookmarked page', 5000),
+            sourceId: String(bm.id),
+            sourceUrl: sanitize(bm.url || '', 2000)
+          }
         );
-        if (result.changes > 0) inserted++;
+        if (res.records.length > 0) inserted++;
       }
     }
 
     if (source_type === 'item' || !source_type) {
-      let items;
+      let items = [];
       if (source_ids && Array.isArray(source_ids) && source_ids.length > 0) {
-        const placeholders = source_ids.map(() => '?').join(',');
-        items = database
-          .prepare(`SELECT * FROM items WHERE user_id = ? AND id IN (${placeholders})`)
-          .all(user_id, ...source_ids);
+        const result = await session.run(
+          `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) WHERE i.id IN $sourceIds RETURN i`,
+          { userId: user_id, sourceIds: source_ids.map(String) }
+        );
+        items = result.records.map(r => r.get('i').properties);
       } else {
-        items = database
-          .prepare(
-            `
-          SELECT i.* FROM items i
-          WHERE i.user_id = ?
-            AND i.id NOT IN (SELECT source_id FROM flashcards WHERE user_id = ? AND source = 'item')
-          ORDER BY i.created_at DESC LIMIT 20
-        `
-          )
-          .all(user_id, user_id);
+        const result = await session.run(
+          `
+          MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item)
+          WHERE NOT EXISTS { MATCH (u)-[:HAS_FLASHCARD]->(f:Flashcard {source: 'item', source_id: i.id}) }
+          RETURN i ORDER BY i.created_at DESC LIMIT 20
+          `,
+          { userId: user_id }
+        );
+        items = result.records.map(r => r.get('i').properties);
       }
-
-      const insertStmt = database.prepare(`
-        INSERT OR IGNORE INTO flashcards (user_id, term, definition, source, source_id, source_url)
-        VALUES (?, ?, ?, 'item', ?, ?)
-      `);
 
       for (const item of items) {
         const term = item.tags
@@ -823,15 +971,36 @@ router.post('/flashcards/generate', (req, res) => {
               .slice(0, 3)
               .join(', ')
           : item.title || 'Saved item';
-        const definition = item.ai_summary || item.content?.slice(0, 300) || 'Saved item';
-        const result = insertStmt.run(
-          user_id,
-          sanitize(term, 500),
-          sanitize(definition, 5000),
-          item.id,
-          sanitize(item.url || '', 2000)
+        const definition = item.ai_summary || (item.content ? item.content.slice(0, 300) : 'Saved item');
+        
+        const res = await session.run(
+          `
+          MATCH (u:User {id: $userId})
+          MERGE (f:Flashcard {source: 'item', source_id: $sourceId, user_id: $userId})
+          ON CREATE SET
+            f.id = randomUUID(),
+            f.term = $term,
+            f.definition = $definition,
+            f.source_url = $sourceUrl,
+            f.ease_factor = 2.5,
+            f.interval_days = 0,
+            f.repetitions = 0,
+            f.next_review_at = datetime(),
+            f.created_at = datetime()
+          WITH f, u
+          MATCH (f) WHERE f.created_at = datetime() OR f.created_at IS NOT NULL
+          MERGE (u)-[:HAS_FLASHCARD]->(f)
+          RETURN f
+          `,
+          {
+            userId: user_id,
+            term: sanitize(term, 500),
+            definition: sanitize(definition, 5000),
+            sourceId: String(item.id),
+            sourceUrl: sanitize(item.url || '', 2000)
+          }
         );
-        if (result.changes > 0) inserted++;
+        if (res.records.length > 0) inserted++;
       }
     }
 
@@ -839,6 +1008,8 @@ router.post('/flashcards/generate', (req, res) => {
   } catch (err) {
     console.error('[Generate Flashcards Error]', err.message);
     return res.status(500).json({ error: 'Failed to generate flashcards.' });
+  } finally {
+    await session.close();
   }
 });
 

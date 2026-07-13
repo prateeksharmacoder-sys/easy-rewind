@@ -1,7 +1,5 @@
 /**
- * easy-rewind — AI Route Module
- *
- * AI-powered endpoints for definitions, summaries, and tagging.
+ * easy-rewind — AI Route Module (Neo4j)
  */
 
 const express = require('express');
@@ -10,9 +8,7 @@ const axios = require('axios');
 
 const { config, getDb, getGenAI, callGemini, sanitize, getUserId, summarizeText, generateTags, generateEmbedding, detectSourceType } = require('./helpers');
 
-// ─────────────────────────────────────────────
 // POST /api/quick-lookup — AI definition for a tech term (cached)
-// ─────────────────────────────────────────────
 router.post('/quick-lookup', async (req, res) => {
   const { term } = req.body;
 
@@ -26,128 +22,105 @@ router.post('/quick-lookup', async (req, res) => {
   }
 
   const database = getDb();
-
-  // Step 1: Check Cache (case-insensitive)
-  const cached = database.prepare('SELECT * FROM cache WHERE LOWER(term) = LOWER(?)').get(cleanTerm);
-  if (cached) {
-    try {
-      database
-        .prepare('INSERT INTO search_log (user_id, query, found) VALUES (?, ?, 1)')
-        .run(getUserId(req), cleanTerm);
-    } catch (_) {}
-    return res.json({
-      term: cached.term,
-      definition: cached.answer,
-      source: 'cache',
-      cached_at: cached.created_at,
-    });
-  }
-
-  // Step 2: Check AI
-  if (!getGenAI()) {
-    const mockDefinition = `"${cleanTerm}" is a tech term. To get AI-powered definitions, please add your GEMINI_API_KEY to the backend/.env file.`;
-    return res.json({
-      term: cleanTerm,
-      definition: mockDefinition,
-      source: 'mock',
-    });
-  }
-
-  // Step 3: Call Gemini (with optional page context + conversation)
-  console.log(`[AI Lookup] "${cleanTerm}"`);
-  let definition = null;
-  let suggestions = [];
+  const session = database.session();
 
   try {
+    // Step 1: Check Cache
+    const cached = await session.run(
+      `MATCH (c:Cache) WHERE toLower(c.term) = toLower($term) RETURN c`,
+      { term: cleanTerm }
+    );
+
+    if (cached.records.length > 0) {
+      const c = cached.records[0].get('c').properties;
+      try {
+        await session.run(
+          `CREATE (sl:SearchLog {id: randomUUID(), user_id: $userId, query: $query, found: 1, created_at: datetime()})`,
+          { userId: getUserId(req), query: cleanTerm }
+        );
+      } catch (_) {}
+      return res.json({
+        term: c.term,
+        definition: c.answer,
+        source: 'cache',
+        cached_at: c.created_at,
+      });
+    }
+
+    // Step 2: Check AI
+    if (!getGenAI()) {
+      const mockDefinition = `"${cleanTerm}" is a tech term. To get AI-powered definitions, please add your GEMINI_API_KEY to the backend/.env file.`;
+      return res.json({ term: cleanTerm, definition: mockDefinition, source: 'mock' });
+    }
+
+    console.log(`[AI Lookup] "${cleanTerm}"`);
+    let definition = null;
+    let suggestions = [];
+
     const { page_context, page_title, conversation } = req.body;
     let prompt;
 
     if (conversation && Array.isArray(conversation) && conversation.length > 0) {
-      const history = conversation
-        .slice(-4)
-        .map(ex => `User: ${ex.term || ex.question}\nAssistant: ${ex.definition || ex.answer}`)
-        .join('\n\n');
-
-      prompt = `You are a helpful tech educator having a CONTINUING conversation with a learner.
-
-Previous conversation:
-${history}
-
-Now the user says: "${cleanTerm}"
-
-${page_context && page_context.trim().length > 10 ? `\nCurrent page context (for reference): ${page_context.slice(0, 500)}` : ''}
-
-Answer their latest question naturally — it may be a follow-up, a clarification, or a new term.
-Be crisp and beginner-friendly (2-4 sentences). Never use bullet points.
-
-Also suggest 2 related tech terms they might want to learn next as a JSON array at the end:
----SUGGESTIONS
-["term1", "term2"]`;
+      const history = conversation.slice(-4).map(ex => `User: ${ex.term || ex.question}\nAssistant: ${ex.definition || ex.answer}`).join('\n\n');
+      prompt = `You are a helpful tech educator having a CONTINUING conversation with a learner.\n\nPrevious conversation:\n${history}\n\nNow the user says: "${cleanTerm}"\n\n${page_context && page_context.trim().length > 10 ? `\nCurrent page context (for reference): ${page_context.slice(0, 500)}` : ''}\n\nAnswer their latest question naturally — it may be a follow-up, a clarification, or a new term.\nBe crisp and beginner-friendly (2-4 sentences). Never use bullet points.\n\nAlso suggest 2 related tech terms they might want to learn next as a JSON array at the end:\n---SUGGESTIONS\n["term1", "term2"]`;
     } else if (page_context && page_context.trim().length > 10) {
-      prompt = `You are a helpful tech educator. Define this tech term in exactly 2-3 sentences, relating it to the context where it appears.
-
-Term: "${cleanTerm}"
-Page Title: ${page_title || 'Unknown'}
-Page Context: ${page_context.slice(0, 1000)}
-
-Explain what this term means in plain language and how it relates to the current topic. Never use bullet points. Always write in plain sentences.
-
-Also suggest 2 related tech terms they might want to learn next as a JSON array at the end:
----SUGGESTIONS
-["term1", "term2"]`;
+      prompt = `You are a helpful tech educator. Define this tech term in exactly 2-3 sentences, relating it to the context where it appears.\n\nTerm: "${cleanTerm}"\nPage Title: ${page_title || 'Unknown'}\nPage Context: ${page_context.slice(0, 1000)}\n\nExplain what this term means in plain language and how it relates to the current topic. Never use bullet points. Always write in plain sentences.\n\nAlso suggest 2 related tech terms they might want to learn next as a JSON array at the end:\n---SUGGESTIONS\n["term1", "term2"]`;
     } else {
-      prompt = `You are a helpful tech educator. Define this tech term in exactly 2-3 sentences. Be crisp, precise, and beginner-friendly. Never use bullet points. Always write in plain sentences. Term: "${cleanTerm}"
-
-Also suggest 2 related tech terms they might want to learn next as a JSON array at the end:
----SUGGESTIONS
-["term1", "term2"]`;
+      prompt = `You are a helpful tech educator. Define this tech term in exactly 2-3 sentences. Be crisp, precise, and beginner-friendly. Never use bullet points. Always write in plain sentences. Term: "${cleanTerm}"\n\nAlso suggest 2 related tech terms they might want to learn next as a JSON array at the end:\n---SUGGESTIONS\n["term1", "term2"]`;
     }
-    definition = await callGemini(prompt);
 
-    if (definition) {
-      const suggestionsMatch = definition.match(/---SUGGESTIONS\s*(\[[\s\S]*?\])\s*$/);
-      if (suggestionsMatch) {
-        try {
-          suggestions = JSON.parse(suggestionsMatch[1]);
-          definition = definition.replace(/---SUGGESTIONS\s*\[[\s\S]*?\]\s*$/, '').trim();
-        } catch (_) {}
+    try {
+      definition = await callGemini(prompt);
+      if (definition) {
+        const suggestionsMatch = definition.match(/---SUGGESTIONS\s*(\[[\s\S]*?\])\s*$/);
+        if (suggestionsMatch) {
+          try {
+            suggestions = JSON.parse(suggestionsMatch[1]);
+            definition = definition.replace(/---SUGGESTIONS\s*\[[\s\S]*?\]\s*$/, '').trim();
+          } catch (_) {}
+        }
       }
+    } catch (err) {
+      console.error('[AI API Error]', err.message);
+      const isAuthError = err.message.includes('API key not valid') || err.message.includes('403');
+      if (isAuthError) return res.status(401).json({ error: 'Gemini API key is invalid.' });
+      return res.status(500).json({ error: 'Gemini is currently unavailable. Try again.' });
     }
+
+    // Cache and log
+    try {
+      await session.run(
+        `CREATE (c:Cache {id: randomUUID(), term: $term, answer: $answer, created_at: datetime()})`,
+        { term: cleanTerm, answer: definition }
+      );
+    } catch (_) {}
+    try {
+      await session.run(
+        `CREATE (sl:SearchLog {id: randomUUID(), user_id: $userId, query: $query, found: 1, created_at: datetime()})`,
+        { userId: getUserId(req), query: cleanTerm }
+      );
+    } catch (_) {}
+
+    return res.json({ term: cleanTerm, definition, source: 'ai', suggestions });
   } catch (err) {
-    console.error('[AI API Error]', err.message);
-    const isAuthError = err.message.includes('API key not valid') || err.message.includes('403');
-    if (isAuthError) return res.status(401).json({ error: 'Gemini API key is invalid.' });
-    return res.status(500).json({ error: 'Gemini is currently unavailable. Try again.' });
+    console.error('[Quick Lookup Error]', err.message);
+    return res.status(500).json({ error: 'Lookup failed.' });
+  } finally {
+    await session.close();
   }
-
-  // Step 4: Cache
-  try {
-    database.prepare('INSERT INTO cache (term, answer) VALUES (?, ?)').run(cleanTerm, definition);
-  } catch (_) {}
-  try {
-    database.prepare('INSERT INTO search_log (user_id, query, found) VALUES (?, ?, 1)').run(getUserId(req), cleanTerm);
-  } catch (_) {}
-
-  return res.json({ term: cleanTerm, definition, source: 'ai', suggestions });
 });
 
-// ─────────────────────────────────────────────
 // POST /api/page-summary — Generate AI summary of a page
-// ─────────────────────────────────────────────
 router.post('/page-summary', async (req, res) => {
   const { url, title, description, text_content } = req.body;
   const textPieces = [
     title && typeof title === 'string' ? `Title: ${title}` : '',
     description && typeof description === 'string' ? `Description: ${description}` : '',
     text_content && typeof text_content === 'string' ? text_content : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+  ].filter(Boolean).join('\n\n');
 
   if (!textPieces || textPieces.trim().length < 20) {
-    return res
-      .status(400)
-      .json({ error: 'Not enough page content to summarize. Try a longer article or reload the page.' });
+    return res.status(400).json({ error: 'Not enough page content to summarize.' });
   }
 
   if (!getGenAI()) {
@@ -160,39 +133,16 @@ router.post('/page-summary', async (req, res) => {
   }
 
   try {
-    const prompt = `You are a reading assistant. Summarize the following webpage content in 3-4 clear paragraphs.
-
-Page Title: ${title || 'Unknown'}
-Page URL: ${url || 'Unknown'}
-Meta Description: ${description || 'N/A'}
-
-Page Content:
-${textPieces.slice(0, 12000)}
-
-Provide:
-1. **Brief Summary** — 2-3 sentences capturing the core topic
-2. **Key Points** — 3-5 bullet points of the most important takeaways
-3. **Who Is This For** — one sentence on the target audience
-
-Use plain markdown formatting, no extra commentary.`;
-
+    const prompt = `You are a reading assistant. Summarize the following webpage content in 3-4 clear paragraphs.\n\nPage Title: ${title || 'Unknown'}\nPage URL: ${url || 'Unknown'}\nMeta Description: ${description || 'N/A'}\n\nPage Content:\n${textPieces.slice(0, 12000)}\n\nProvide:\n1. **Brief Summary** — 2-3 sentences capturing the core topic\n2. **Key Points** — 3-5 bullet points of the most important takeaways\n3. **Who Is This For** — one sentence on the target audience\n\nUse plain markdown formatting, no extra commentary.`;
     const summary = await callGemini(prompt);
-
-    return res.json({
-      summary,
-      title: title || 'Page Summary',
-      url: url || '',
-      source: 'ai',
-    });
+    return res.json({ summary, title: title || 'Page Summary', url: url || '', source: 'ai' });
   } catch (err) {
     console.error('[Page Summary Error]', err.message);
     return res.status(500).json({ error: 'Failed to generate summary.' });
   }
 });
 
-// ─────────────────────────────────────────────
 // POST /api/summarize — AI text summarization
-// ─────────────────────────────────────────────
 router.post('/summarize', async (req, res) => {
   const { text, max_sentences, style } = req.body;
 
@@ -203,34 +153,18 @@ router.post('/summarize', async (req, res) => {
   const cleanText = sanitize(text, 12000);
 
   try {
-    const result = await summarizeText(cleanText, {
-      maxSentences: parseInt(max_sentences) || 3,
-      style: style || 'concise',
-    });
-
+    const result = await summarizeText(cleanText, { maxSentences: parseInt(max_sentences) || 3, style: style || 'concise' });
     if (!result.success) {
-      console.error('[Summarize Error]', result.error);
-      return res
-        .status(502)
-        .json({ error: `Summarization failed: ${result.error}`, fallback: cleanText.slice(0, 500) });
+      return res.status(502).json({ error: `Summarization failed: ${result.error}`, fallback: cleanText.slice(0, 500) });
     }
-
-    return res.json({
-      success: true,
-      summary: result.summary,
-      source: 'ai',
-      model: config.model,
-      length: result.summary.length,
-    });
+    return res.json({ success: true, summary: result.summary, source: 'ai', model: config.model, length: result.summary.length });
   } catch (err) {
     console.error('[Summarize Critical Error]', err.message);
     return res.status(500).json({ error: 'Summarization service unavailable.', fallback: cleanText.slice(0, 500) });
   }
 });
 
-// ─────────────────────────────────────────────
 // POST /api/tag — Auto-tag content
-// ─────────────────────────────────────────────
 router.post('/tag', async (req, res) => {
   const { text, max_tags } = req.body;
 
@@ -242,49 +176,40 @@ router.post('/tag', async (req, res) => {
 
   try {
     const result = await generateTags(cleanText, { maxTags: parseInt(max_tags) || 5 });
-
     if (!result.success) {
       return res.status(502).json({ error: `Tagging failed: ${result.error}` });
     }
-
-    return res.json({
-      success: true,
-      tags: result.tags,
-      count: result.tags.length,
-    });
+    return res.json({ success: true, tags: result.tags, count: result.tags.length });
   } catch (err) {
     console.error('[Tag Error]', err.message);
     return res.status(500).json({ error: 'Tagging service unavailable.' });
   }
 });
 
-// ─────────────────────────────────────────────
 // POST /api/analyze-url — Fetch + AI analyze any URL, auto-save to items
-// ─────────────────────────────────────────────
 router.post('/analyze-url', async (req, res) => {
   const { url, title } = req.body;
   const user_id = getUserId(req);
 
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'URL is required.' });
-  }
-
-  try {
-    new URL(url);
-  } catch {
-    return res.status(400).json({ error: 'Invalid URL format.' });
-  }
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'URL is required.' });
+  try { new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL format.' }); }
 
   const database = getDb();
+  const session = database.session();
 
   try {
     // Check if we already have an item for this URL
-    const existingItem = database.prepare('SELECT * FROM items WHERE url = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1').get(url, user_id);
-    if (existingItem && existingItem.ai_summary) {
+    const existingRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) WHERE i.url = $url AND i.ai_summary IS NOT NULL AND i.ai_summary <> '' RETURN i ORDER BY i.created_at DESC LIMIT 1`,
+      { userId: user_id, url }
+    );
+
+    if (existingRes.records.length > 0) {
+      const ei = existingRes.records[0].get('i').properties;
       return res.json({
-        summary: existingItem.ai_summary,
-        tags: (existingItem.tags || '').split(',').filter(Boolean),
-        item_id: existingItem.id,
+        summary: ei.ai_summary,
+        tags: (ei.tags || '').split(',').filter(Boolean),
+        item_id: ei.id,
         cached: true,
       });
     }
@@ -293,10 +218,7 @@ router.post('/analyze-url', async (req, res) => {
     let pageContent = '';
     let fetchError = null;
     try {
-      const response = await axios.get(url, {
-        timeout: 10000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; easy-rewind/1.0)' },
-      });
+      const response = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; easy-rewind/1.0)' } });
       pageContent = response.data
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -313,60 +235,57 @@ router.post('/analyze-url', async (req, res) => {
     }
 
     if (!pageContent || pageContent.length < 50) {
-      return res.json({
-        summary: null,
-        error: fetchError ? `Could not fetch page: ${fetchError}` : 'Page has minimal readable content',
-      });
+      return res.json({ summary: null, error: fetchError ? `Could not fetch page: ${fetchError}` : 'Page has minimal readable content' });
     }
 
-    // Generate AI summary using the existing summarizeText helper
     const summaryResult = await summarizeText(pageContent, { maxSentences: 4, style: 'concise' });
     let summary = summaryResult.success ? summaryResult.summary : '';
     let tags = [];
 
-    // Auto-tag
     const tagResult = await generateTags(pageContent, { maxTags: 5 });
     if (tagResult.success) tags = tagResult.tags;
 
-    // If summary is empty, try direct Gemini call
     if (!summary && getGenAI()) {
       try {
-        const prompt = `Summarize the following webpage in 3-4 concise sentences. Focus on the main topic and key takeaways.
-
-Page Title: ${title || 'Unknown'}
-Page URL: ${url}
-
-Page Content:
-${pageContent.slice(0, 4000)}
-
-Summary:`;
+        const prompt = `Summarize the following webpage in 3-4 concise sentences. Focus on the main topic and key takeaways.\n\nPage Title: ${title || 'Unknown'}\nPage URL: ${url}\n\nPage Content:\n${pageContent.slice(0, 4000)}\n\nSummary:`;
         summary = await callGemini(prompt);
       } catch (_) {}
     }
 
-    if (!summary) {
-      summary = pageContent.slice(0, 300);
-    }
+    if (!summary) summary = pageContent.slice(0, 300);
 
-    // Auto-save to items table for future reuse
+    // Auto-save to items
     try {
       const sourceType = detectSourceType(url);
-      const itemInfo = database
-        .prepare(
-          `INSERT INTO items (user_id, url, title, content, ai_summary, tags, source_type, memory_score, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0.5, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))`
-        )
-        .run(user_id, sanitize(url, 2000), sanitize(title || 'Saved Page', 500), pageContent.slice(0, 2000), summary, tags.join(','), sourceType);
-      const itemId = itemInfo.lastInsertRowid;
+      const createRes = await session.run(
+        `MERGE (u:User {id: $userId})
+         CREATE (i:Item {
+           id: randomUUID(),
+           url: $url,
+           title: $title,
+           content: $content,
+           ai_summary: $summary,
+           tags: $tags,
+           source_type: $sourceType,
+           memory_score: 0.5,
+           interaction_count: 0,
+           created_at: datetime(),
+           updated_at: datetime()
+         })
+         CREATE (u)-[:HAS_ITEM]->(i)
+         RETURN i`,
+        { userId: user_id, url: sanitize(url, 2000), title: sanitize(title || 'Saved Page', 500), content: pageContent.slice(0, 2000), summary, tags: tags.join(','), sourceType }
+      );
+      const itemId = createRes.records[0] ? createRes.records[0].get('i').properties.id : null;
 
-      // Generate embedding asynchronously (don't block response)
+      // Generate embedding asynchronously
       generateEmbedding(pageContent || title)
-        .then(vec => {
-          if (vec && Array.isArray(vec)) {
+        .then(async vec => {
+          if (vec && Array.isArray(vec) && itemId) {
             try {
-              database
-                .prepare('INSERT OR REPLACE INTO item_embeddings (item_id, embedding, model) VALUES (?, ?, ?)')
-                .run(itemId, JSON.stringify(vec), config.apiKey?.startsWith('sk-') ? 'openai' : 'gemini');
+              const s = database.session();
+              await s.run(`MATCH (i:Item {id: $id}) SET i.embedding = $emb`, { id: itemId, emb: JSON.stringify(vec) });
+              await s.close();
             } catch (_) {}
           }
         })
@@ -380,6 +299,8 @@ Summary:`;
   } catch (err) {
     console.error('[Analyze-URL Error]', err.message);
     return res.status(500).json({ error: 'Failed to analyze URL.' });
+  } finally {
+    await session.close();
   }
 });
 

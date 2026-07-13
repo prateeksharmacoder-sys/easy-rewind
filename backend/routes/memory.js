@@ -8,11 +8,9 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  config,
   getDb,
   getUserId,
   sanitize,
-  isValidId,
   normalizeDate,
   generateEmbedding,
   cosineSimilarity,
@@ -25,43 +23,68 @@ const {
   getGenAI,
 } = require('./helpers');
 
+const neo4j = require('neo4j-driver');
+
 // ═════════════════════════════════════════════
 // HIGHLIGHTS ENDPOINTS
 // ═════════════════════════════════════════════
 
 // POST /api/highlights — Save a highlight
-router.post('/highlights', (req, res) => {
+router.post('/highlights', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
     const { url, page_title, text, context, color, tags, note } = req.body;
     if (!url || !text) return res.status(400).json({ error: 'url and text are required' });
 
     const cleanText = sanitize(text, 2000);
-    const existing = database
-      .prepare('SELECT id FROM highlights WHERE user_id = ? AND url = ? AND text = ?')
-      .get(uid, url, cleanText);
-    if (existing) {
-      return res.json({ highlight: existing, duplicate: true });
+
+    try {
+      // Check for duplicate
+      const dupCheck = await session.run(
+        `MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight {url: $url, text: $text}) RETURN h`,
+        { uid, url, text: cleanText }
+      );
+      if (dupCheck.records.length > 0) {
+        const hl = dupCheck.records[0].get('h').properties;
+        return res.json({ highlight: hl, duplicate: true });
+      }
+
+      const result = await session.run(
+        `
+        MERGE (u:User {id: $uid})
+        CREATE (h:Highlight {
+          id: randomUUID(),
+          url: $url,
+          page_title: $page_title,
+          text: $text,
+          context: $context,
+          color: $color,
+          tags: $tags,
+          note: $note,
+          created_at: datetime()
+        })
+        CREATE (u)-[:HAS_HIGHLIGHT]->(h)
+        RETURN h
+        `,
+        {
+          uid,
+          url: sanitize(url, 2048),
+          page_title: sanitize(page_title || '', 500),
+          text: cleanText,
+          context: sanitize(context || '', 3000),
+          color: color || 'yellow',
+          tags: sanitize(tags || '', 500),
+          note: sanitize(note || '', 1000)
+        }
+      );
+
+      const highlight = result.records[0] ? result.records[0].get('h').properties : null;
+      return res.json({ highlight });
+    } finally {
+      await session.close();
     }
-
-    const stmt = database.prepare(
-      `INSERT INTO highlights (user_id, url, page_title, text, context, color, tags, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    const result = stmt.run(
-      uid,
-      sanitize(url, 2048),
-      sanitize(page_title || '', 500),
-      cleanText,
-      sanitize(context || '', 3000),
-      color || 'yellow',
-      sanitize(tags || '', 500),
-      sanitize(note || '', 1000)
-    );
-
-    const highlight = database.prepare('SELECT * FROM highlights WHERE id = ?').get(result.lastInsertRowid);
-    return res.json({ highlight });
   } catch (err) {
     console.error('[Highlights Save Error]', err.message);
     return res.status(500).json({ error: 'Failed to save highlight.', detail: err.message });
@@ -69,29 +92,37 @@ router.post('/highlights', (req, res) => {
 });
 
 // GET /api/highlights — List highlights (optional ?url= filter)
-router.get('/highlights', (req, res) => {
+router.get('/highlights', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
     const url = req.query.url;
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
     const offset = (page - 1) * limit;
 
-    let where = 'WHERE user_id = ?';
-    const params = [uid];
+    try {
+      let whereClause = 'WHERE u.id = $uid';
+      const params = { uid, limit: neo4j.int(limit), skip: neo4j.int(offset) };
 
-    if (url) {
-      where += ' AND url = ?';
-      params.push(sanitize(url, 2048));
+      if (url) {
+        whereClause += ' AND h.url = $url';
+        params.url = sanitize(url, 2048);
+      }
+
+      const countQ = `MATCH (u:User)-[:HAS_HIGHLIGHT]->(h:Highlight) ${whereClause} RETURN count(h) AS c`;
+      const dataQ = `MATCH (u:User)-[:HAS_HIGHLIGHT]->(h:Highlight) ${whereClause} RETURN h ORDER BY h.created_at DESC SKIP $skip LIMIT $limit`;
+
+      const cRes = await session.run(countQ, params);
+      const dRes = await session.run(dataQ, params);
+      const total = cRes.records[0] ? cRes.records[0].get('c').toNumber() : 0;
+      const highlights = dRes.records.map(r => r.get('h').properties);
+
+      return res.json({ highlights, total, page, limit });
+    } finally {
+      await session.close();
     }
-
-    const total = database.prepare(`SELECT COUNT(*) as count FROM highlights ${where}`).get(...params).count;
-    const highlights = database
-      .prepare(`SELECT * FROM highlights ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
-      .all(...params, limit, offset);
-
-    return res.json({ highlights, total, page, limit });
   } catch (err) {
     console.error('[Highlights List Error]', err.message);
     return res.status(500).json({ error: 'Failed to load highlights.' });
@@ -99,36 +130,47 @@ router.get('/highlights', (req, res) => {
 });
 
 // GET /api/highlights/stats — Get highlight count per page
-router.get('/highlights/stats', (req, res) => {
+router.get('/highlights/stats', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
-    const total = database.prepare('SELECT COUNT(*) as count FROM highlights WHERE user_id = ?').get(uid).count;
-    const perPage = database
-      .prepare(
-        `SELECT url, page_title, COUNT(*) as count FROM highlights WHERE user_id = ? GROUP BY url ORDER BY count DESC LIMIT 10`
-      )
-      .all(uid);
-    const colors = database
-      .prepare(`SELECT color, COUNT(*) as count FROM highlights WHERE user_id = ? GROUP BY color ORDER BY count DESC`)
-      .all(uid);
-    return res.json({ total, perPage, colors });
+    try {
+      const totalRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight) RETURN count(h) AS c`, { uid });
+      const perPageRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight) RETURN h.url AS url, h.page_title AS page_title, count(h) AS count ORDER BY count DESC LIMIT 10`, { uid });
+      const colorsRes = await session.run(`MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight) RETURN h.color AS color, count(h) AS count ORDER BY count DESC`, { uid });
+      const total = totalRes.records[0] ? totalRes.records[0].get('c').toNumber() : 0;
+      const perPage = perPageRes.records.map(r => ({ url: r.get('url'), page_title: r.get('page_title'), count: r.get('count').toNumber() }));
+      const colors = colorsRes.records.map(r => ({ color: r.get('color'), count: r.get('count').toNumber() }));
+      return res.json({ total, perPage, colors });
+    } finally {
+      await session.close();
+    }
   } catch (err) {
     return res.status(500).json({ error: 'Failed to load stats.' });
   }
 });
 
 // DELETE /api/highlights/:id — Delete a highlight
-router.delete('/highlights/:id', (req, res) => {
+router.delete('/highlights/:id', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
-    const id = parseInt(req.params.id);
+    const id = req.params.id;
     if (!id) return res.status(400).json({ error: 'Invalid highlight ID' });
 
-    const result = database.prepare('DELETE FROM highlights WHERE id = ? AND user_id = ?').run(id, uid);
-    if (result.changes === 0) return res.status(404).json({ error: 'Highlight not found' });
-    return res.json({ success: true });
+    try {
+      const result = await session.run(
+        `MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight {id: $id}) DETACH DELETE h RETURN count(h) AS deleted`,
+        { uid, id: String(id) }
+      );
+      const deleted = result.records[0] ? result.records[0].get('deleted').toNumber() : 0;
+      if (deleted === 0) return res.status(404).json({ error: 'Highlight not found' });
+      return res.json({ success: true });
+    } finally {
+      await session.close();
+    }
   } catch (err) {
     console.error('[Highlights Delete Error]', err.message);
     return res.status(500).json({ error: 'Failed to delete highlight.' });
@@ -153,19 +195,36 @@ router.post('/items', async (req, res) => {
   const cleanUrl = sanitize(url || '', 2000);
 
   const database = getDb();
+  const session = database.session();
 
   try {
     const sourceType = detectSourceType(cleanUrl);
 
-    const info = database
-      .prepare(
-        `
-      INSERT INTO items (user_id, url, title, content, source_type, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'), (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z'))
-    `
-      )
-      .run(user_id, cleanUrl, cleanTitle, cleanContent, sourceType);
-    const itemId = info.lastInsertRowid;
+    const createRes = await session.run(
+      `
+      MERGE (u:User {id: $userId})
+      CREATE (i:Item {
+        id: randomUUID(),
+        url: $url,
+        title: $title,
+        content: $content,
+        source_type: $sourceType,
+        ai_summary: '',
+        tags: '',
+        embedding: null,
+        memory_score: 0.5,
+        interaction_count: 0,
+        created_at: datetime(),
+        updated_at: datetime()
+      })
+      CREATE (u)-[:HAS_ITEM]->(i)
+      RETURN i
+      `,
+      { userId: user_id, url: cleanUrl, title: cleanTitle, content: cleanContent, sourceType }
+    );
+
+    const itemProps = createRes.records[0].get('i').properties;
+    const itemId = itemProps.id;
 
     let summary = '';
     let tags = [];
@@ -174,57 +233,41 @@ router.post('/items', async (req, res) => {
     const summaryPromise = skip_summary
       ? Promise.resolve('')
       : summarizeText(cleanContent || cleanTitle)
-          .then(r => {
-            summary = r.success ? r.summary : '';
-          })
-          .catch(err => {
-            console.warn('[Items] Summary failed:', err.message);
-          });
+          .then(r => { summary = r.success ? r.summary : ''; })
+          .catch(err => { console.warn('[Items] Summary failed:', err.message); });
 
     const embeddingPromise = skip_embedding
       ? Promise.resolve()
       : generateEmbedding(cleanContent || cleanTitle)
-          .then(vec => {
-            embedding = vec;
-          })
-          .catch(err => {
-            console.warn('[Items] Embedding failed:', err.message);
-          });
+          .then(vec => { embedding = vec; })
+          .catch(err => { console.warn('[Items] Embedding failed:', err.message); });
 
     await Promise.all([summaryPromise, embeddingPromise]);
 
-    database
-      .prepare("UPDATE items SET summary = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z') WHERE id = ?")
-      .run(summary || '', itemId);
-
-    if (embedding && Array.isArray(embedding)) {
-      try {
-        database
-          .prepare(
-            `
-          INSERT OR REPLACE INTO item_embeddings (item_id, embedding, model)
-          VALUES (?, ?, ?)
-        `
-          )
-          .run(itemId, JSON.stringify(embedding), config.apiKey?.startsWith('sk-') ? 'openai' : 'gemini');
-      } catch (embedErr) {
-        console.warn('[Items] Embedding storage failed:', embedErr.message);
+    await session.run(
+      `MATCH (i:Item {id: $itemId}) SET i.ai_summary = $summary, i.updated_at = datetime(), i.embedding = $embedding`,
+      {
+        itemId,
+        summary: summary || '',
+        embedding: (embedding && Array.isArray(embedding)) ? JSON.stringify(embedding) : null
       }
-    }
+    );
 
     if (!skip_tags) {
       try {
         const tagResult = await generateTags(summary || cleanContent || cleanTitle);
         if (tagResult.success && tagResult.tags.length > 0) {
           tags = tagResult.tags;
-          storeItemTags(database, itemId, tags, user_id);
+          await storeItemTags(database, itemId, tags, user_id);
         }
       } catch (tagErr) {
         console.warn('[Items] Auto-tagging failed:', tagErr.message);
       }
     }
 
-    const item = database.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+    const finalRes = await session.run(`MATCH (i:Item {id: $itemId}) RETURN i`, { itemId });
+    const item = finalRes.records[0] ? finalRes.records[0].get('i').properties : itemProps;
+
     return res.json({
       success: true,
       item,
@@ -235,60 +278,66 @@ router.post('/items', async (req, res) => {
   } catch (err) {
     console.error('[Items Save Error]', err.message);
     return res.status(500).json({ error: 'Failed to save item.' });
+  } finally {
+    await session.close();
   }
 });
 
 // GET /api/items — List items with optional ?since= param for sync
-router.get('/items', (req, res) => {
+router.get('/items', async (req, res) => {
   const user_id = getUserId(req);
   const since = req.query.since || null;
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   const offset = parseInt(req.query.offset) || 0;
 
   const database = getDb();
+  const session = database.session();
 
   try {
     let query, params;
     if (since) {
       const sinceDate = normalizeDate(since);
       if (!sinceDate) return res.status(400).json({ error: 'Invalid since timestamp. Use ISO 8601 format.' });
-      query = `SELECT * FROM items WHERE user_id = ? AND updated_at > ? ORDER BY updated_at ASC LIMIT ? OFFSET ?`;
-      params = [user_id, sinceDate, limit, offset];
+      query = `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) WHERE i.updated_at >= datetime($since) RETURN i ORDER BY i.updated_at ASC SKIP $skip LIMIT $limit`;
+      params = { userId: user_id, since: sinceDate, limit: neo4j.int(limit), skip: neo4j.int(offset) };
     } else {
-      query = `SELECT * FROM items WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-      params = [user_id, limit, offset];
+      query = `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) RETURN i ORDER BY i.created_at DESC SKIP $skip LIMIT $limit`;
+      params = { userId: user_id, limit: neo4j.int(limit), skip: neo4j.int(offset) };
     }
 
-    const items = database.prepare(query).all(...params);
-    const total = database.prepare('SELECT COUNT(*) as count FROM items WHERE user_id = ?').get(user_id).count;
+    const dataRes = await session.run(query, params);
+    const countRes = await session.run(`MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) RETURN count(i) AS c`, { userId: user_id });
 
-    for (const item of items) {
-      if (item.created_at && !item.created_at.endsWith('Z')) item.created_at += 'Z';
-      if (item.updated_at && !item.updated_at.endsWith('Z')) item.updated_at += 'Z';
-    }
+    const items = dataRes.records.map(r => r.get('i').properties);
+    const total = countRes.records[0] ? countRes.records[0].get('c').toNumber() : 0;
 
     return res.json({ items: items || [], total, since: since || null });
   } catch (err) {
     console.error('[Items List Error]', err.message);
     return res.status(500).json({ error: 'Failed to load items.' });
+  } finally {
+    await session.close();
   }
 });
 
 // DELETE /api/items/:id — Delete an item and its embeddings/tags
-router.delete('/items/:id', (req, res) => {
+router.delete('/items/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
   const database = getDb();
+  const session = database.session();
 
   try {
-    const item = database.prepare('SELECT id FROM items WHERE id = ? AND user_id = ?').get(id, user_id);
-    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const checkRes = await session.run(`MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id}) RETURN i`, { userId: user_id, id: String(id) });
+    if (checkRes.records.length === 0) return res.status(404).json({ error: 'Item not found.' });
 
-    database.prepare('DELETE FROM items WHERE id = ? AND user_id = ?').run(id, user_id);
+    await session.run(`MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id}) DETACH DELETE i`, { userId: user_id, id: String(id) });
     return res.json({ success: true, message: 'Item deleted.' });
   } catch (err) {
     console.error('[Items Delete Error]', err.message);
     return res.status(500).json({ error: 'Failed to delete item.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -297,43 +346,35 @@ router.delete('/items/:id', (req, res) => {
 // ═════════════════════════════════════════════
 
 // PATCH /api/items/:id/interact — Record interaction, bumps memory_score
-router.patch('/items/:id/interact', (req, res) => {
+router.patch('/items/:id/interact', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
   const action = req.body.action || 'view';
   const database = getDb();
+  const session = database.session();
 
   try {
-    const item = database
-      .prepare('SELECT id, memory_score, interaction_count FROM items WHERE id = ? AND user_id = ?')
-      .get(id, user_id);
-    if (!item) return res.status(404).json({ error: 'Item not found.' });
+    const itemRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id}) RETURN i`,
+      { userId: user_id, id: String(id) }
+    );
+    if (itemRes.records.length === 0) return res.status(404).json({ error: 'Item not found.' });
 
-    const actionPoints = {
-      view: 0.2,
-      click: 0.5,
-      search: 1.0,
-      review: 2.0,
-      link: 0.3,
-    };
+    const item = itemRes.records[0].get('i').properties;
+    const actionPoints = { view: 0.2, click: 0.5, search: 1.0, review: 2.0, link: 0.3 };
     const increment = actionPoints[action] || 0.2;
-    const newScore = Math.min((item.memory_score || 0) + increment, 100);
-    const newCount = (item.interaction_count || 0) + 1;
-    const now = new Date().toISOString();
+    const newScore = Math.min((parseFloat(item.memory_score) || 0) + increment, 100);
+    const newCount = (parseInt(item.interaction_count) || 0) + 1;
 
-    database
-      .prepare(
-        `
-      UPDATE items
-      SET memory_score = ?, interaction_count = ?, last_interacted_at = ?, updated_at = ?
-      WHERE id = ? AND user_id = ?
-    `
-      )
-      .run(newScore, newCount, now, now, id, user_id);
+    await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id})
+       SET i.memory_score = $score, i.interaction_count = $count, i.last_interaction = datetime(), i.updated_at = datetime()`,
+      { userId: user_id, id: String(id), score: newScore, count: neo4j.int(newCount) }
+    );
 
     return res.json({
       success: true,
-      item_id: parseInt(id),
+      item_id: id,
       memory_score: newScore,
       interaction_count: newCount,
       action,
@@ -341,6 +382,8 @@ router.patch('/items/:id/interact', (req, res) => {
   } catch (err) {
     console.error('[Interact Error]', err.message);
     return res.status(500).json({ error: 'Failed to record interaction.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -349,93 +392,64 @@ router.patch('/items/:id/interact', (req, res) => {
 // ═════════════════════════════════════════════
 
 // GET /api/items/:id/related — Find semantically related items via embedding cosine similarity
-router.get('/items/:id/related', (req, res) => {
+router.get('/items/:id/related', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
   const limit = Math.min(parseInt(req.query.limit) || 5, 20);
   const database = getDb();
+  const session = database.session();
 
   try {
-    const sourceEmbedding = database
-      .prepare(
-        `
-      SELECT ie.embedding FROM item_embeddings ie
-      JOIN items i ON i.id = ie.item_id
-      WHERE ie.item_id = ? AND i.user_id = ?
-    `
-      )
-      .get(id, user_id);
+    // Get source item embedding
+    const srcRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id}) RETURN i.embedding AS emb, i.tags AS tags`,
+      { userId: user_id, id: String(id) }
+    );
+    if (srcRes.records.length === 0) return res.status(404).json({ error: 'Item not found.' });
 
-    if (!sourceEmbedding) {
-      const sourceTags = database.prepare('SELECT tags FROM items WHERE id = ? AND user_id = ?').get(id, user_id);
-      if (!sourceTags) return res.status(404).json({ error: 'Item not found.' });
+    const srcEmb = srcRes.records[0].get('emb');
+    const srcTags = srcRes.records[0].get('tags') || '';
 
-      const tagList = (sourceTags.tags || '')
-        .split(',')
-        .filter(Boolean)
-        .map(t => t.trim());
+    if (!srcEmb) {
+      // Fall back to tag-based similarity
+      const tagList = srcTags.split(',').filter(Boolean).map(t => t.trim());
       if (tagList.length === 0) return res.json({ related: [], count: 0 });
 
-      const placeholders = tagList.map(() => 'LOWER(tags) LIKE ?').join(' OR ');
-      const params = tagList.flatMap(t => [`%${t.toLowerCase()}%`]);
-      const related = database
-        .prepare(
-          `
-        SELECT i.id, i.title, i.summary, i.url, i.tags, i.source_type, i.created_at,
-               i.memory_score
-        FROM items i
-        WHERE i.user_id = ? AND i.id != ?
-          AND (${placeholders})
-        ORDER BY i.memory_score DESC, i.created_at DESC
-        LIMIT ?
-      `
-        )
-        .all(user_id, id, ...params, limit);
-
-      return res.json({ related: related || [], count: related?.length || 0, method: 'tag' });
+      const tagRes = await session.run(
+        `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item)
+         WHERE i.id <> $id AND any(tag IN $tags WHERE toLower(i.tags) CONTAINS toLower(tag))
+         RETURN i ORDER BY i.memory_score DESC, i.created_at DESC LIMIT $limit`,
+        { userId: user_id, id: String(id), tags: tagList, limit: neo4j.int(limit) }
+      );
+      const related = tagRes.records.map(r => r.get('i').properties);
+      return res.json({ related, count: related.length, method: 'tag' });
     }
 
-    const sourceVec = parseEmbedding(sourceEmbedding.embedding);
+    const sourceVec = parseEmbedding(srcEmb);
     if (!sourceVec) return res.json({ related: [], count: 0 });
 
-    const allEmbeddings = database
-      .prepare(
-        `
-      SELECT ie.item_id, ie.embedding, i.title, i.summary, i.url, i.tags, i.source_type,
-             i.created_at, i.memory_score
-      FROM item_embeddings ie
-      JOIN items i ON i.id = ie.item_id
-      WHERE i.user_id = ? AND ie.item_id != ?
-    `
-      )
-      .all(user_id, id);
+    const allRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) WHERE i.id <> $id AND i.embedding IS NOT NULL RETURN i`,
+      { userId: user_id, id: String(id) }
+    );
 
     const scored = [];
-    for (const row of allEmbeddings) {
-      const vec = parseEmbedding(row.embedding);
+    for (const r of allRes.records) {
+      const item = r.get('i').properties;
+      const vec = parseEmbedding(item.embedding);
       if (!vec) continue;
       const sim = cosineSimilarity(sourceVec, vec);
       if (sim < 0.1) continue;
-      scored.push({
-        id: row.item_id,
-        title: row.title || '',
-        summary: row.summary || '',
-        url: row.url || '',
-        tags: row.tags || '',
-        source_type: row.source_type || 'web',
-        similarity: Math.round(sim * 1000) / 1000,
-        memory_score: row.memory_score || 0,
-        created_at: row.created_at,
-      });
+      scored.push({ ...item, similarity: Math.round(sim * 1000) / 1000 });
     }
-
     scored.sort((a, b) => b.similarity - a.similarity);
     const related = scored.slice(0, limit);
-
     return res.json({ related, count: related.length, method: 'embedding' });
   } catch (err) {
     console.error('[Related Items Error]', err.message);
     return res.status(500).json({ error: 'Failed to find related items.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -444,130 +458,87 @@ router.get('/items/:id/related', (req, res) => {
 // ═════════════════════════════════════════════
 
 // POST /api/items/:id/connect — Create a connection between two items
-router.post('/items/:id/connect', (req, res) => {
-  const sourceId = parseInt(req.params.id);
+router.post('/items/:id/connect', async (req, res) => {
+  const sourceId = req.params.id;
   const { target_id, relationship, confidence } = req.body;
   const user_id = getUserId(req);
   const database = getDb();
+  const session = database.session();
 
   if (!target_id) return res.status(400).json({ error: 'target_id is required.' });
-  if (sourceId === target_id) return res.status(400).json({ error: 'Cannot connect an item to itself.' });
+  if (sourceId === String(target_id)) return res.status(400).json({ error: 'Cannot connect an item to itself.' });
 
   try {
-    const source = database.prepare('SELECT id FROM items WHERE id = ? AND user_id = ?').get(sourceId, user_id);
-    const target = database.prepare('SELECT id FROM items WHERE id = ? AND user_id = ?').get(target_id, user_id);
-    if (!source) return res.status(404).json({ error: 'Source item not found.' });
-    if (!target) return res.status(404).json({ error: 'Target item not found.' });
-
     const rel = sanitize(relationship || 'related', 50);
     const conf = Math.max(0, Math.min(1, parseFloat(confidence) || 0.5));
 
-    database
-      .prepare(
-        `
-      INSERT OR REPLACE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
-      VALUES (?, ?, ?, ?, ?, 'manual')
-    `
-      )
-      .run(user_id, sourceId, target_id, rel, conf);
+    const srcCheck = await session.run(`MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id}) RETURN i`, { userId: user_id, id: String(sourceId) });
+    const tgtCheck = await session.run(`MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item {id: $id}) RETURN i`, { userId: user_id, id: String(target_id) });
+    if (srcCheck.records.length === 0) return res.status(404).json({ error: 'Source item not found.' });
+    if (tgtCheck.records.length === 0) return res.status(404).json({ error: 'Target item not found.' });
 
-    database
-      .prepare(
-        `
-      INSERT OR IGNORE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
-      VALUES (?, ?, ?, ?, ?, 'manual')
-    `
-      )
-      .run(user_id, target_id, sourceId, rel, conf);
+    await session.run(
+      `
+      MATCH (a:Item {id: $srcId}), (b:Item {id: $tgtId})
+      MERGE (a)-[r:CONNECTED_TO {relationship: $rel}]->(b)
+      SET r.confidence = $conf, r.source = 'manual', r.created_at = coalesce(r.created_at, datetime())
+      MERGE (b)-[r2:CONNECTED_TO {relationship: $rel}]->(a)
+      SET r2.confidence = $conf, r2.source = 'manual', r2.created_at = coalesce(r2.created_at, datetime())
+      `,
+      { srcId: String(sourceId), tgtId: String(target_id), rel, conf }
+    );
 
-    const connection = database
-      .prepare(
-        `
-      SELECT * FROM memory_connections WHERE source_item_id = ? AND target_item_id = ? AND relationship = ?
-    `
-      )
-      .get(sourceId, target_id, rel);
-
-    return res.json({ success: true, connection });
+    return res.json({ success: true, connection: { source_item_id: sourceId, target_item_id: String(target_id), relationship: rel, confidence: conf } });
   } catch (err) {
     console.error('[Connect Error]', err.message);
     return res.status(500).json({ error: 'Failed to create connection.' });
+  } finally {
+    await session.close();
   }
 });
 
 // GET /api/items/:id/connections — Get all connections for an item
-router.get('/items/:id/connections', (req, res) => {
+router.get('/items/:id/connections', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
   const database = getDb();
+  const session = database.session();
 
   try {
-    const outgoing = database
-      .prepare(
-        `
-      SELECT mc.*, i.title as target_title, i.url as target_url, i.ai_summary as target_summary,
-             i.source_type as target_source_type, i.memory_score as target_memory_score
-      FROM memory_connections mc
-      JOIN items i ON i.id = mc.target_item_id
-      WHERE mc.source_item_id = ? AND mc.user_id = ?
-      ORDER BY mc.confidence DESC, mc.created_at DESC
-    `
-      )
-      .all(id, user_id);
-
-    const incoming = database
-      .prepare(
-        `
-      SELECT mc.*, i.title as source_title, i.url as source_url, i.ai_summary as source_summary,
-             i.source_type as source_source_type, i.memory_score as source_memory_score
-      FROM memory_connections mc
-      JOIN items i ON i.id = mc.source_item_id
-      WHERE mc.target_item_id = ? AND mc.user_id = ?
-      ORDER BY mc.confidence DESC, mc.created_at DESC
-    `
-      )
-      .all(id, user_id);
+    const result = await session.run(
+      `
+      MATCH (src:Item {id: $id})-[r:CONNECTED_TO]->(tgt:Item)
+      MATCH (u:User {id: $userId})-[:HAS_ITEM]->(src)
+      RETURN r, tgt, 'outgoing' AS direction
+      UNION
+      MATCH (tgt:Item)-[r:CONNECTED_TO]->(src:Item {id: $id})
+      MATCH (u:User {id: $userId})-[:HAS_ITEM]->(src)
+      RETURN r, tgt, 'incoming' AS direction
+      `,
+      { id: String(id), userId: user_id }
+    );
 
     const seen = new Set();
     const allConnections = [];
-
-    for (const c of outgoing) {
-      const key = `out-${c.target_item_id}`;
+    for (const rec of result.records) {
+      const tgt = rec.get('tgt').properties;
+      const r = rec.get('r').properties;
+      const direction = rec.get('direction');
+      const key = `${direction}-${tgt.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
       allConnections.push({
-        id: c.id,
-        connected_item_id: c.target_item_id,
-        title: c.target_title,
-        url: c.target_url,
-        summary: c.target_summary,
-        source_type: c.target_source_type,
-        memory_score: c.target_memory_score,
-        relationship: c.relationship,
-        confidence: c.confidence,
-        direction: 'outgoing',
-        source: c.source,
-        created_at: c.created_at,
-      });
-    }
-
-    for (const c of incoming) {
-      const key = `in-${c.source_item_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      allConnections.push({
-        id: c.id,
-        connected_item_id: c.source_item_id,
-        title: c.source_title,
-        url: c.source_url,
-        summary: c.source_summary,
-        source_type: c.source_source_type,
-        memory_score: c.source_memory_score,
-        relationship: c.relationship,
-        confidence: c.confidence,
-        direction: 'incoming',
-        source: c.source,
-        created_at: c.created_at,
+        connected_item_id: tgt.id,
+        title: tgt.title || '',
+        url: tgt.url || '',
+        summary: tgt.ai_summary || '',
+        source_type: tgt.source_type || 'web',
+        memory_score: tgt.memory_score || 0,
+        relationship: r.relationship || 'related',
+        confidence: r.confidence || 0.5,
+        direction,
+        source: r.source || 'manual',
+        created_at: r.created_at
       });
     }
 
@@ -575,6 +546,8 @@ router.get('/items/:id/connections', (req, res) => {
   } catch (err) {
     console.error('[Get Connections Error]', err.message);
     return res.status(500).json({ error: 'Failed to get connections.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -583,25 +556,19 @@ router.post('/connections/discover', async (req, res) => {
   const user_id = getUserId(req);
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
   const database = getDb();
+  const session = database.session();
 
   try {
-    const unconnectedItems = database
-      .prepare(
-        `
-      SELECT * FROM (
-        SELECT i.id, i.title, i.ai_summary as summary, i.content, i.url, i.tags, i.source_type, i.memory_score, i.created_at,
-               (SELECT COUNT(DISTINCT CASE WHEN mc.source_item_id = i.id THEN mc.target_item_id ELSE mc.source_item_id END)
-                FROM memory_connections mc
-                WHERE mc.source_item_id = i.id OR mc.target_item_id = i.id) as conn_count
-        FROM items i
-        WHERE i.user_id = ?
-      ) sub
-      WHERE conn_count < 2
-      ORDER BY sub.memory_score DESC, sub.created_at DESC
-      LIMIT ?
-    `
-      )
-      .all(user_id, limit);
+    const unconnectedRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item)
+       OPTIONAL MATCH (i)-[r:CONNECTED_TO]-()
+       WITH i, count(r) AS connCount
+       WHERE connCount < 2
+       RETURN i ORDER BY i.memory_score DESC, i.created_at DESC LIMIT $limit`,
+      { userId: user_id, limit: neo4j.int(limit) }
+    );
+
+    const unconnectedItems = unconnectedRes.records.map(r => r.get('i').properties);
 
     if (unconnectedItems.length < 2) {
       return res.json({ discovered: 0, message: 'Not enough unconnected items to discover connections.' });
@@ -612,35 +579,25 @@ router.post('/connections/discover', async (req, res) => {
 
     for (let i = 0; i < unconnectedItems.length; i++) {
       const a = unconnectedItems[i];
-      const aTags = (a.tags || '')
-        .split(',')
-        .map(t => t.trim().toLowerCase())
-        .filter(Boolean);
+      const aTags = (a.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
 
       for (let j = i + 1; j < unconnectedItems.length; j++) {
         const b = unconnectedItems[j];
-        const pairKey = `${Math.min(a.id, b.id)}-${Math.max(a.id, b.id)}`;
+        const pairKey = `${a.id < b.id ? a.id : b.id}-${a.id < b.id ? b.id : a.id}`;
         if (seenPairs.has(pairKey)) continue;
         seenPairs.add(pairKey);
 
-        const existing = database
-          .prepare(
-            `
-          SELECT id FROM memory_connections
-          WHERE ((source_item_id = ? AND target_item_id = ?) OR (source_item_id = ? AND target_item_id = ?))
-            AND user_id = ?
-        `
-          )
-          .get(a.id, b.id, b.id, a.id, user_id);
-        if (existing) continue;
+        // Check if connection already exists
+        const existRes = await session.run(
+          `MATCH (a:Item {id: $aId})-[r:CONNECTED_TO]-(b:Item {id: $bId}) RETURN r LIMIT 1`,
+          { aId: a.id, bId: b.id }
+        );
+        if (existRes.records.length > 0) continue;
 
-        const bTags = (b.tags || '')
-          .split(',')
-          .map(t => t.trim().toLowerCase())
-          .filter(Boolean);
+        const bTags = (b.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
         const sharedTags = aTags.filter(t => bTags.includes(t)).length;
-        const tagScore = sharedTags / Math.max(aTags.length, bTags.length);
-        const memoryScore = ((a.memory_score || 0) + (b.memory_score || 0)) / 200;
+        const tagScore = sharedTags / Math.max(aTags.length, bTags.length, 1);
+        const memoryScore = ((parseFloat(a.memory_score) || 0) + (parseFloat(b.memory_score) || 0)) / 200;
         const combinedScore = tagScore * 0.6 + memoryScore * 0.4;
 
         if (combinedScore > 0.1 || sharedTags > 0) {
@@ -664,118 +621,98 @@ router.post('/connections/discover', async (req, res) => {
           const prompt = `You are a knowledge graph curator. Given two saved items from a user's knowledge base, determine the relationship between them.
 
 Item A: "${pair.a.title || 'Untitled'}"
-Summary A: "${(pair.a.summary || pair.a.content || '').slice(0, 300)}"
+Summary A: "${(pair.a.ai_summary || pair.a.content || '').slice(0, 300)}"
 Tags A: ${pair.a.tags || 'none'}
 
 Item B: "${pair.b.title || 'Untitled'}"
-Summary B: "${(pair.b.summary || pair.b.content || '').slice(0, 300)}"
+Summary B: "${(pair.b.ai_summary || pair.b.content || '').slice(0, 300)}"
 Tags B: ${pair.b.tags || 'none'}
 
 Choose ONE relationship from: "related", "prerequisite", "extension", "contrast", "application", "part_of", "example", "reference"
 Respond with just the relationship word, nothing else.`;
 
           const result = await callGemini(prompt);
-          const validRelationships = [
-            'related',
-            'prerequisite',
-            'extension',
-            'contrast',
-            'application',
-            'part_of',
-            'example',
-            'reference',
-          ];
-          if (validRelationships.includes(result?.trim().toLowerCase())) {
-            relationship = result.trim().toLowerCase();
-          }
+          const valid = ['related', 'prerequisite', 'extension', 'contrast', 'application', 'part_of', 'example', 'reference'];
+          if (valid.includes(result?.trim().toLowerCase())) relationship = result.trim().toLowerCase();
         } catch (_) {}
       }
 
       try {
-        database
-          .prepare(
-            `
-          INSERT OR IGNORE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
-          VALUES (?, ?, ?, ?, ?, 'auto')
-        `
-          )
-          .run(user_id, pair.a.id, pair.b.id, relationship, Math.round(confidence * 100) / 100);
-
-        database
-          .prepare(
-            `
-          INSERT OR IGNORE INTO memory_connections (user_id, source_item_id, target_item_id, relationship, confidence, source)
-          VALUES (?, ?, ?, ?, ?, 'auto')
-        `
-          )
-          .run(user_id, pair.b.id, pair.a.id, relationship, Math.round(confidence * 100) / 100);
-
+        await session.run(
+          `MATCH (a:Item {id: $aId}), (b:Item {id: $bId})
+           MERGE (a)-[r:CONNECTED_TO {relationship: $rel}]->(b)
+           ON CREATE SET r.confidence = $conf, r.source = 'auto', r.created_at = datetime()
+           MERGE (b)-[r2:CONNECTED_TO {relationship: $rel}]->(a)
+           ON CREATE SET r2.confidence = $conf, r2.source = 'auto', r2.created_at = datetime()`,
+          { aId: pair.a.id, bId: pair.b.id, rel: relationship, conf: Math.round(confidence * 100) / 100 }
+        );
         discovered++;
       } catch (_) {}
     }
 
-    return res.json({
-      discovered,
-      candidates_considered: pairs.length,
-      message: `Discovered ${discovered} new connections between your memories.`,
-    });
+    return res.json({ discovered, candidates_considered: pairs.length, message: `Discovered ${discovered} new connections between your memories.` });
   } catch (err) {
     console.error('[Discover Connections Error]', err.message);
     return res.status(500).json({ error: 'Failed to discover connections.' });
+  } finally {
+    await session.close();
   }
 });
 
 // DELETE /api/connections/:id — Remove a connection
-router.delete('/connections/:id', (req, res) => {
+router.delete('/connections/:id', async (req, res) => {
   const { id } = req.params;
   const user_id = getUserId(req);
   const database = getDb();
-
+  const session = database.session();
   try {
-    database.prepare('DELETE FROM memory_connections WHERE id = ? AND user_id = ?').run(id, user_id);
+    await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(a:Item)-[r:CONNECTED_TO {id: $id}]->(b:Item) DELETE r`,
+      { userId: user_id, id: String(id) }
+    );
     return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to delete connection.' });
+  } finally {
+    await session.close();
   }
 });
 
 // GET /api/knowledge-graph — Full graph data for dashboard visualization
-router.get('/knowledge-graph', (req, res) => {
+router.get('/knowledge-graph', async (req, res) => {
   const user_id = getUserId(req);
   const database = getDb();
+  const session = database.session();
 
   try {
-    const nodes = database
-      .prepare(
-        `
-      SELECT id, title, url, tags, source_type, memory_score, interaction_count, created_at
-      FROM items WHERE user_id = ?
-      ORDER BY memory_score DESC
-    `
-      )
-      .all(user_id);
+    const nodesRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) RETURN i ORDER BY i.memory_score DESC`,
+      { userId: user_id }
+    );
+    const edgesRes = await session.run(
+      `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(a:Item)-[r:CONNECTED_TO]->(b:Item) RETURN a.id AS src, b.id AS tgt, r.relationship AS rel, r.confidence AS conf, r.source AS source`,
+      { userId: user_id }
+    );
 
-    const edges = database
-      .prepare(
-        `
-      SELECT id, source_item_id, target_item_id, relationship, confidence, source
-      FROM memory_connections WHERE user_id = ?
-      ORDER BY confidence DESC
-    `
-      )
-      .all(user_id);
+    const nodes = nodesRes.records.map(r => r.get('i').properties);
+    const edges = edgesRes.records.map(r => ({
+      source_item_id: r.get('src'),
+      target_item_id: r.get('tgt'),
+      relationship: r.get('rel'),
+      confidence: r.get('conf'),
+      source: r.get('source')
+    }));
 
     return res.json({
       nodes: nodes || [],
       edges: edges || [],
-      stats: {
-        node_count: nodes?.length || 0,
-        edge_count: edges?.length || 0,
-      },
+      stats: { node_count: nodes.length, edge_count: edges.length },
     });
   } catch (err) {
     console.error('[Knowledge Graph Error]', err.message);
     return res.status(500).json({ error: 'Failed to load knowledge graph.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -794,6 +731,7 @@ router.get('/items/search', async (req, res) => {
 
   const cleanQuery = sanitize(query, 500);
   const database = getDb();
+  const session = database.session();
 
   try {
     let queryEmbedding;
@@ -811,17 +749,10 @@ router.get('/items/search', async (req, res) => {
     let results = [];
 
     if (queryEmbedding && Array.isArray(queryEmbedding)) {
-      const embeddings = database
-        .prepare(
-          `
-        SELECT ie.item_id, ie.embedding, i.title, i.summary, i.content, i.tags, i.url,
-               i.source_type, i.created_at, i.memory_score, i.interaction_count, i.last_interacted_at
-        FROM item_embeddings ie
-        JOIN items i ON i.id = ie.item_id
-        WHERE i.user_id = ?
-      `
-        )
-        .all(user_id);
+      const embRes = await session.run(
+        `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) WHERE i.embedding IS NOT NULL RETURN i`,
+        { userId: user_id }
+      );
 
       const sourceTypeBoost = type => {
         const boosts = { youtube: 1.0, github: 1.05, blog: 1.1, docs: 1.08, news: 0.95, web: 1.0 };
@@ -829,7 +760,8 @@ router.get('/items/search', async (req, res) => {
       };
 
       const scored = [];
-      for (const row of embeddings) {
+      for (const rec of embRes.records) {
+        const row = rec.get('i').properties;
         const storedVec = parseEmbedding(row.embedding);
         if (!storedVec) continue;
 
@@ -838,24 +770,23 @@ router.get('/items/search', async (req, res) => {
 
         const ageMs = now - new Date(row.created_at).getTime();
         const recency = daysToRecency(ageMs / (24 * 60 * 60 * 1000));
-        const memScore = normalizeScore(row.memory_score);
-        const frequency = normalizeFreq(row.interaction_count);
+        const memScore = normalizeScore(parseFloat(row.memory_score) || 0);
+        const frequency = normalizeFreq(parseInt(row.interaction_count) || 0);
         const srcBoost = sourceTypeBoost(row.source_type);
-
         const hybridScore = (0.4 * sim + 0.3 * recency + 0.2 * memScore + 0.1 * frequency) * srcBoost;
 
         scored.push({
-          id: row.item_id,
+          id: row.id,
           title: row.title || '',
-          summary: row.summary || '',
+          summary: row.ai_summary || '',
           content: row.content ? row.content.slice(0, 300) : '',
           tags: row.tags || '',
           url: row.url || '',
           source_type: row.source_type || 'web',
           similarity: Math.round(sim * 1000) / 1000,
           recency: Math.round(recency * 1000) / 1000,
-          memory_score: row.memory_score || 0,
-          interaction_count: row.interaction_count || 0,
+          memory_score: parseFloat(row.memory_score) || 0,
+          interaction_count: parseInt(row.interaction_count) || 0,
           score: Math.round(hybridScore * 1000) / 1000,
           created_at: row.created_at,
         });
@@ -866,62 +797,43 @@ router.get('/items/search', async (req, res) => {
     }
 
     if (results.length < 3) {
-      const pattern = `%${cleanQuery}%`;
       const sourceTypeBoost = type => {
         const boosts = { youtube: 1.0, github: 1.05, blog: 1.1, docs: 1.08, news: 0.95, web: 1.0 };
         return boosts[type] || 1.0;
       };
 
-      const keywordResults = database
-        .prepare(
-          `
-        SELECT id, title, summary, content, tags, url, source_type, created_at,
-               memory_score, interaction_count, last_interacted_at,
-               CASE
-                 WHEN LOWER(title) LIKE LOWER(?) THEN 1.0
-                 WHEN LOWER(summary) LIKE LOWER(?) THEN 0.8
-                 WHEN LOWER(content) LIKE LOWER(?) THEN 0.5
-                 WHEN LOWER(tags) LIKE LOWER(?) THEN 0.7
-                 ELSE 0.3
-               END as kw_score
-        FROM items
-        WHERE user_id = ?
-          AND (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?) OR LOWER(content) LIKE LOWER(?) OR LOWER(tags) LIKE LOWER(?))
-        ORDER BY kw_score DESC
-        LIMIT 15
-      `
-        )
-        .all(pattern, pattern, pattern, pattern, user_id, pattern, pattern, pattern, pattern);
+      const kwRes = await session.run(
+        `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item)
+         WHERE toLower(i.title) CONTAINS toLower($q) OR toLower(i.ai_summary) CONTAINS toLower($q)
+               OR toLower(i.content) CONTAINS toLower($q) OR toLower(i.tags) CONTAINS toLower($q)
+         RETURN i,
+                CASE WHEN toLower(i.title) CONTAINS toLower($q) THEN 1.0
+                     WHEN toLower(i.tags) CONTAINS toLower($q) THEN 0.7
+                     WHEN toLower(i.ai_summary) CONTAINS toLower($q) THEN 0.8
+                     ELSE 0.5 END AS kw_score
+         ORDER BY kw_score DESC LIMIT 15`,
+        { userId: user_id, q: cleanQuery }
+      );
 
       const existingIds = new Set(results.map(r => r.id));
-      const seenIds = new Set();
-
-      for (const r of keywordResults) {
-        if (existingIds.has(r.id) || seenIds.has(r.id)) continue;
-        seenIds.add(r.id);
-
+      for (const rec of kwRes.records) {
+        const r = rec.get('i').properties;
+        if (existingIds.has(r.id)) continue;
+        const kwScore = rec.get('kw_score');
         const ageMs = now - new Date(r.created_at).getTime();
         const recency = daysToRecency(ageMs / (24 * 60 * 60 * 1000));
-        const memScore = normalizeScore(r.memory_score);
-        const freq = normalizeFreq(r.interaction_count);
+        const memScore = normalizeScore(parseFloat(r.memory_score) || 0);
+        const freq = normalizeFreq(parseInt(r.interaction_count) || 0);
         const srcBoost = sourceTypeBoost(r.source_type);
-
-        const hybridScore = (0.4 * (r.kw_score || 0.3) + 0.3 * recency + 0.2 * memScore + 0.1 * freq) * srcBoost;
+        const hybridScore = (0.4 * (kwScore || 0.3) + 0.3 * recency + 0.2 * memScore + 0.1 * freq) * srcBoost;
 
         results.push({
-          id: r.id,
-          title: r.title || '',
-          summary: r.summary || '',
-          content: r.content ? r.content.slice(0, 300) : '',
-          tags: r.tags || '',
-          url: r.url || '',
-          source_type: r.source_type || 'web',
-          similarity: 0,
-          recency: Math.round(recency * 1000) / 1000,
-          memory_score: r.memory_score || 0,
-          interaction_count: r.interaction_count || 0,
-          score: Math.round(hybridScore * 1000) / 1000,
-          created_at: r.created_at,
+          id: r.id, title: r.title || '', summary: r.ai_summary || '',
+          content: r.content ? r.content.slice(0, 300) : '', tags: r.tags || '',
+          url: r.url || '', source_type: r.source_type || 'web',
+          similarity: 0, recency: Math.round(recency * 1000) / 1000,
+          memory_score: parseFloat(r.memory_score) || 0, interaction_count: parseInt(r.interaction_count) || 0,
+          score: Math.round(hybridScore * 1000) / 1000, created_at: r.created_at,
         });
       }
     }
@@ -938,6 +850,8 @@ router.get('/items/search', async (req, res) => {
   } catch (err) {
     console.error('[Hybrid Search Error]', err.message);
     return res.status(500).json({ error: 'Search failed.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -956,6 +870,7 @@ router.get('/ask', async (req, res) => {
 
   const cleanQuery = sanitize(query, 1000);
   const database = getDb();
+  const session = database.session();
 
   try {
     let searchResults = [];
@@ -963,43 +878,31 @@ router.get('/ask', async (req, res) => {
       const queryEmbedding = await generateEmbedding(cleanQuery).catch(() => null);
 
       if (queryEmbedding && Array.isArray(queryEmbedding)) {
-        const embeddings = database
-          .prepare(
-            `
-          SELECT ie.item_id, ie.embedding, i.title, i.summary, i.content, i.url
-          FROM item_embeddings ie
-          JOIN items i ON i.id = ie.item_id
-          WHERE i.user_id = ?
-        `
-          )
-          .all(user_id);
-
+        const embRes = await session.run(
+          `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item) WHERE i.embedding IS NOT NULL RETURN i`,
+          { userId: user_id }
+        );
         const scored = [];
-        for (const row of embeddings) {
+        for (const rec of embRes.records) {
+          const row = rec.get('i').properties;
           const storedVec = parseEmbedding(row.embedding);
           if (!storedVec) continue;
           const score = cosineSimilarity(queryEmbedding, storedVec);
-          if (score > 0.15) {
-            scored.push({ ...row, score });
-          }
+          if (score > 0.15) scored.push({ ...row, score });
         }
         scored.sort((a, b) => b.score - a.score);
         searchResults = scored.slice(0, 5);
       }
 
       if (searchResults.length === 0) {
-        const pattern = `%${cleanQuery}%`;
-        searchResults = database
-          .prepare(
-            `
-          SELECT id as item_id, title, summary, content, url FROM items
-          WHERE user_id = ?
-            AND (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?) OR LOWER(content) LIKE LOWER(?) OR LOWER(tags) LIKE LOWER(?))
-          ORDER BY created_at DESC
-          LIMIT 5
-        `
-          )
-          .all(user_id, pattern, pattern, pattern, pattern);
+        const kwRes = await session.run(
+          `MATCH (u:User {id: $userId})-[:HAS_ITEM]->(i:Item)
+           WHERE toLower(i.title) CONTAINS toLower($q) OR toLower(i.ai_summary) CONTAINS toLower($q)
+                 OR toLower(i.content) CONTAINS toLower($q) OR toLower(i.tags) CONTAINS toLower($q)
+           RETURN i ORDER BY i.created_at DESC LIMIT 5`,
+          { userId: user_id, q: cleanQuery }
+        );
+        searchResults = kwRes.records.map(r => r.get('i').properties);
       }
     } catch (searchErr) {
       console.warn('[Ask] Search phase failed:', searchErr.message);
@@ -1014,11 +917,8 @@ Question: "${cleanQuery}"
 Answer the question based on your general knowledge. Keep your answer concise (2-4 sentences). If you're not confident about the answer, say so.`;
     } else {
       const context = searchResults
-        .map(
-          (r, i) => `[${i + 1}] Title: ${r.title || 'Untitled'}\nSummary: ${r.summary || 'N/A'}\nURL: ${r.url || 'N/A'}`
-        )
+        .map((r, i) => `[${i + 1}] Title: ${r.title || 'Untitled'}\nSummary: ${r.ai_summary || r.summary || 'N/A'}\nURL: ${r.url || 'N/A'}`)
         .join('\n\n');
-
       ragPrompt = `You are a helpful knowledge assistant. Answer the user's question based ONLY on the context from their saved items below. If the context doesn't contain enough information to answer fully, say so — don't make things up.
 
 Context from saved items:
@@ -1032,10 +932,9 @@ Answer concisely (2-4 sentences). If helpful, reference which saved item(s) the 
     const ai = getGenAI();
     if (!ai) {
       return res.json({
-        answer:
-          searchResults.length > 0
-            ? `Found ${searchResults.length} relevant saved items. Enable AI (GEMINI_API_KEY) for generative answers.`
-            : 'AI not configured. Set GEMINI_API_KEY in .env for AI-powered answers.',
+        answer: searchResults.length > 0
+          ? `Found ${searchResults.length} relevant saved items. Enable AI (GEMINI_API_KEY) for generative answers.`
+          : 'AI not configured. Set GEMINI_API_KEY in .env for AI-powered answers.',
         sources: searchResults.map(r => ({ title: r.title, url: r.url })),
         source_count: searchResults.length,
       });
@@ -1048,7 +947,7 @@ Answer concisely (2-4 sentences). If helpful, reference which saved item(s) the 
       sources: searchResults.map(r => ({
         title: r.title || 'Untitled',
         url: r.url || '',
-        summary: r.summary || '',
+        summary: r.ai_summary || r.summary || '',
         score: r.score || null,
       })),
       source_count: searchResults.length,
@@ -1057,6 +956,8 @@ Answer concisely (2-4 sentences). If helpful, reference which saved item(s) the 
   } catch (err) {
     console.error('[Ask RAG Error]', err.message);
     return res.status(500).json({ error: 'Failed to generate answer.' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -1065,94 +966,55 @@ Answer concisely (2-4 sentences). If helpful, reference which saved item(s) the 
 // ═════════════════════════════════════════════
 
 // GET /api/review-digest — Generate a review digest of recent items
-router.get('/review-digest', (req, res) => {
+router.get('/review-digest', async (req, res) => {
   try {
     const database = getDb();
+    const session = database.session();
     const uid = getUserId(req);
     const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 365);
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    const recentLimit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const recentLimit = neo4j.int(Math.min(parseInt(req.query.limit) || 20, 50));
+    const now = new Date().toISOString();
 
-    const bookmarks = database
-      .prepare(
-        `
-      SELECT id, url, title, topic, notes, created_at
-      FROM bookmarks
-      WHERE user_id = ? AND created_at >= ?
-      ORDER BY created_at DESC LIMIT ?
-    `
-      )
-      .all(uid, since, recentLimit);
-    const notes = database
-      .prepare(
-        `
-      SELECT id, content, source_url, source_title, created_at
-      FROM notes
-      WHERE user_id = ? AND created_at >= ? AND completed = 0
-      ORDER BY created_at DESC LIMIT ?
-    `
-      )
-      .all(uid, since, recentLimit);
-    const highlights = database
-      .prepare(
-        `
-      SELECT id, url, page_title, text, color, created_at
-      FROM highlights
-      WHERE user_id = ? AND created_at >= ?
-      ORDER BY created_at DESC LIMIT ?
-    `
-      )
-      .all(uid, since, recentLimit);
-    const dueReminders = database
-      .prepare(
-        `
-      SELECT id, reminder_type, reference_type, title, message, remind_at
-      FROM reminders
-      WHERE user_id = ? AND reminded = 0 AND dismissed = 0 AND remind_at <= ?
-      ORDER BY remind_at ASC LIMIT ?
-    `
-      )
-      .all(uid, new Date().toISOString(), recentLimit);
+    try {
+      const bmRes = await session.run(
+        `MATCH (u:User {id: $uid})-[:HAS_BOOKMARK]->(b:Bookmark) WHERE b.created_at >= datetime($since) RETURN b ORDER BY b.created_at DESC LIMIT $limit`,
+        { uid, since, limit: recentLimit }
+      );
+      const notesRes = await session.run(
+        `MATCH (u:User {id: $uid})-[:HAS_NOTE]->(n:Note) WHERE n.created_at >= datetime($since) AND coalesce(n.completed, 0) = 0 RETURN n ORDER BY n.created_at DESC LIMIT $limit`,
+        { uid, since, limit: recentLimit }
+      );
+      const hlRes = await session.run(
+        `MATCH (u:User {id: $uid})-[:HAS_HIGHLIGHT]->(h:Highlight) WHERE h.created_at >= datetime($since) RETURN h ORDER BY h.created_at DESC LIMIT $limit`,
+        { uid, since, limit: recentLimit }
+      );
+      const remRes = await session.run(
+        `MATCH (u:User {id: $uid})-[:HAS_REMINDER]->(r:Reminder) WHERE coalesce(r.reminded, 0) = 0 AND coalesce(r.dismissed, 0) = 0 AND r.remind_at <= datetime($now) RETURN r ORDER BY r.remind_at ASC LIMIT $limit`,
+        { uid, now, limit: recentLimit }
+      );
 
-    const reviewItems = [
-      ...bookmarks.map(item => ({
-        type: 'bookmark',
-        title: item.title || item.topic,
-        detail: item.topic,
-        url: item.url,
-        created_at: item.created_at,
-      })),
-      ...notes.map(item => ({
-        type: 'note',
-        title: item.source_title || 'Note',
-        detail: item.content.slice(0, 160),
-        url: item.source_url || '',
-        created_at: item.created_at,
-      })),
-      ...highlights.map(item => ({
-        type: 'highlight',
-        title: item.page_title || 'Highlight',
-        detail: item.text.slice(0, 160),
-        url: item.url,
-        color: item.color,
-        created_at: item.created_at,
-      })),
-    ]
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-      .slice(0, recentLimit);
+      const bookmarks = bmRes.records.map(r => r.get('b').properties);
+      const notes = notesRes.records.map(r => r.get('n').properties);
+      const highlights = hlRes.records.map(r => r.get('h').properties);
+      const dueReminders = remRes.records.map(r => r.get('r').properties);
 
-    return res.json({
-      days,
-      generated_at: new Date().toISOString(),
-      stats: {
-        bookmarks: bookmarks.length,
-        notes: notes.length,
-        highlights: highlights.length,
-        due_reminders: dueReminders.length,
-      },
-      due_reminders: dueReminders,
-      review_items: reviewItems,
-    });
+      const reviewItems = [
+        ...bookmarks.map(item => ({ type: 'bookmark', title: item.title || item.topic, detail: item.topic, url: item.url, created_at: item.created_at })),
+        ...notes.map(item => ({ type: 'note', title: item.source_title || 'Note', detail: (item.content || '').slice(0, 160), url: item.source_url || '', created_at: item.created_at })),
+        ...highlights.map(item => ({ type: 'highlight', title: item.page_title || 'Highlight', detail: (item.text || '').slice(0, 160), url: item.url, color: item.color, created_at: item.created_at })),
+      ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, parseInt(req.query.limit) || 20);
+
+      return res.json({
+        days,
+        generated_at: new Date().toISOString(),
+        stats: { bookmarks: bookmarks.length, notes: notes.length, highlights: highlights.length, due_reminders: dueReminders.length },
+        due_reminders: dueReminders,
+        review_items: reviewItems,
+      });
+    } finally {
+      await session.close();
+    }
   } catch (err) {
     console.error('[Review Digest Error]', err.message);
     return res.status(500).json({ error: 'Failed to generate review digest.' });
